@@ -39,7 +39,7 @@ def create_system_prompt(topic, mode_data, trend=""):
     {{
         "midjourney_prompt": "Visual description + {mode_data['keywords']} + {mode_data['ar']} --v 6.0",
         "title": "SEO Title (English, Max 70 chars)",
-        "keywords": "47 keywords (English, comma separated)",
+        "keywords": "50 keywords (English, comma separated)",
         "social_caption": "Caption (Indonesian) + CTA",
         "hashtags": "#hashtags"
     }}
