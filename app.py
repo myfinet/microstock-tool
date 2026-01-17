@@ -3,10 +3,15 @@ import google.generativeai as genai
 import json
 import time
 
-# --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Microstock Prompt Lite", page_icon="⚡", layout="wide")
+# --- 1. KONFIGURASI HALAMAN ---
+st.set_page_config(
+    page_title="Microstock Prompt Lite", 
+    page_icon="⚡", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# --- DEFINISI MODE VISUAL ---
+# --- 2. DEFINISI DATA & MODE ---
 VISUAL_MODES = {
     "1": {"name": "Isolated Object (Siap Slice)", "keywords": "white background, studio lighting, no shadow, isolated on white", "ar": "--ar 1:1"},
     "2": {"name": "Copy Space (Space Iklan)", "keywords": "minimalist, wide shot, rule of thirds, negative space on the side", "ar": "--ar 16:9"},
@@ -15,71 +20,120 @@ VISUAL_MODES = {
     "5": {"name": "Infographic & Isometric", "keywords": "isometric view, 3d vector render, gradient glass texture, tech startup vibe, --no text letters", "ar": "--ar 16:9"}
 }
 
-# --- LOGIKA API KEY (HYBRID) ---
+# --- 3. LOGIKA API KEY (ROBUST VERSION) ---
+def load_api_keys():
+    """Membaca API Key dari Secrets atau Input Manual dengan aman."""
+    keys = []
+    source = "Manual"
+    
+    # Cek Secrets (Prioritas Utama)
+    if "api_keys" in st.secrets:
+        secret_val = st.secrets["api_keys"]
+        
+        # Jika formatnya List: ["key1", "key2"]
+        if isinstance(secret_val, list):
+            keys = secret_val
+            source = "Secrets (List)"
+            
+        # Jika formatnya String: "key1,key2,key3"
+        elif isinstance(secret_val, str):
+            # Pecah koma dan bersihkan spasi
+            keys = [k.strip() for k in secret_val.split(',') if k.strip()]
+            source = "Secrets (String)"
+            
+    return keys, source
+
+# Load Keys saat aplikasi mulai
+API_KEYS, key_source = load_api_keys()
+
+# Tampilan Sidebar
 st.sidebar.header("⚡ Konfigurasi API")
-API_KEYS = []
-raw_keys = ""
 
-# Prioritas 1: Ambil dari Secrets Cloud
-if "api_keys" in st.secrets:
-    raw_keys = st.secrets["api_keys"]
-    st.sidebar.success(f"✅ Menggunakan {len(raw_keys.split(','))} Key dari Cloud.")
-# Prioritas 2: Input Manual
+if API_KEYS:
+    st.sidebar.success(f"✅ Terhubung via {key_source}")
+    st.sidebar.text(f"Jumlah Key: {len(API_KEYS)}")
 else:
-    st.sidebar.info("Masukkan API Key (pisahkan koma).")
-    raw_keys = st.sidebar.text_area("API Keys", placeholder="Key1,Key2,Key3")
+    st.sidebar.warning("⚠️ Secrets kosong/tidak ditemukan.")
+    st.sidebar.info("Masukkan API Key Manual di bawah:")
+    input_manual = st.sidebar.text_area("Paste API Keys (Pisahkan koma)", height=100)
+    if input_manual:
+        API_KEYS = [k.strip() for k in input_manual.split(',') if k.strip()]
+        if API_KEYS:
+            st.sidebar.success(f"✅ {len(API_KEYS)} Key Manual Dimuat!")
 
-if raw_keys:
-    # Membersihkan spasi dan memisahkan koma
-    API_KEYS = [k.strip() for k in raw_keys.split(',') if k.strip()]
-
-# --- FUNGSI GENERATOR ---
+# --- 4. FUNGSI GENERATOR AI ---
 def get_model(api_key):
     genai.configure(api_key=api_key)
-    return genai.GenerativeModel(model_name="gemini-1.5-flash", generation_config={"response_mime_type": "application/json"})
+    return genai.GenerativeModel(
+        model_name="gemini-1.5-flash", 
+        generation_config={"response_mime_type": "application/json"}
+    )
 
-def create_lite_prompt(topic, mode_data, trend=""):
-    # Prompt super pendek agar hemat & cepat
+def clean_json_text(text_response):
+    """Membersihkan output jika AI menyertakan backticks markdown."""
+    clean = text_response.strip()
+    if clean.startswith("```json"):
+        clean = clean[7:]
+    if clean.startswith("```"):
+        clean = clean[3:]
+    if clean.endswith("```"):
+        clean = clean[:-3]
+    return clean.strip()
+
+def create_sys_prompt(topic, mode_data, trend=""):
     return f"""
-    Task: Create 1 Midjourney prompt.
+    Task: Create 1 Midjourney prompt description only.
     Topic: "{topic}"
-    Style: "{mode_data['name']}" + {trend}
+    Style: "{mode_data['name']}" {f'+ Trend: {trend}' if trend else ''}
     Mandatory Params: {mode_data['keywords']} {mode_data['ar']} --v 6.0
     
-    RETURN JSON ONLY: {{ "prompt": "Your_Prompt_Here" }}
+    INSTRUCTION:
+    - Do NOT use '/imagine prompt:' prefix.
+    - Return output in strictly Valid JSON format: {{ "prompt": "your prompt text here" }}
     """
 
 def run_generation(topic, mode_key, trend, qty):
     mode_data = VISUAL_MODES[mode_key]
     results = []
+    
+    # UI Component
     progress_bar = st.progress(0)
     status_text = st.empty()
+    
+    # Logic Rotasi Key
     key_index = 0
     
     for i in range(qty):
-        status_text.text(f"⚡ Generating prompt {i+1}/{qty}...")
+        status_text.text(f"⚡ Sedang meracik prompt {i+1} dari {qty}...")
         success = False
         
+        # Coba generate dengan key yang ada
         while not success and key_index < len(API_KEYS):
             current_key = API_KEYS[key_index]
             try:
+                # 1. Init Model
                 model = get_model(current_key)
-                sys_prompt = create_lite_prompt(topic, mode_data, trend)
-                response = model.generate_content(sys_prompt)
+                # 2. Kirim Prompt
+                sys_msg = create_sys_prompt(topic, mode_data, trend)
+                response = model.generate_content(sys_msg)
                 
-                data = json.loads(response.text)
+                # 3. Parsing JSON (dengan pembersih)
+                clean_txt = clean_json_text(response.text)
+                data = json.loads(clean_txt)
                 
-                # Bersihkan format jika ada sisa '/imagine'
-                clean_prompt = data['prompt'].replace('/imagine prompt:', '').strip()
-                results.append(clean_prompt)
+                # 4. Ambil Prompt Final
+                final_prompt = data.get('prompt', 'Error parsing prompt')
+                results.append(final_prompt)
                 
                 success = True
                 time.sleep(5) # Jeda ringan
-            except Exception:
-                key_index += 1 # Ganti key jika error
+                
+            except Exception as e:
+                # print(f"Error Key-{key_index}: {e}") # Debugging Log
+                key_index += 1 # Pindah ke key cadangan
         
         if not success:
-            st.error("❌ Semua API Key limit/habis. Tambahkan key baru.")
+            st.error(f"❌ Gagal pada prompt ke-{i+1}. Semua API Key limit atau error.")
             break
             
         progress_bar.progress((i + 1) / qty)
@@ -87,49 +141,49 @@ def run_generation(topic, mode_key, trend, qty):
     status_text.empty()
     return results
 
-# --- UI UTAMA ---
+# --- 5. ANTARMUKA UTAMA (UI) ---
 st.title("⚡ Microstock Prompt Lite")
 st.markdown("---")
 
+# Form Input
 col1, col2 = st.columns(2)
 with col1:
-    topic = st.text_input("💡 Topik", placeholder="Misal: Imlek Kuda Api")
+    topic = st.text_input("💡 Topik Utama", placeholder="Contoh: Imlek Kuda Api")
     mode_key = st.selectbox("🎨 Mode Visual", list(VISUAL_MODES.keys()), format_func=lambda x: VISUAL_MODES[x]['name'])
 with col2:
-    trend = st.text_input("📈 Trend (Opsional)", placeholder="Misal: Cyberpunk")
-    qty = st.number_input("🔢 Jumlah", 1, 100, 5)
+    trend = st.text_input("📈 Trend (Opsional)", placeholder="Contoh: Cyberpunk, Pastel")
+    qty = st.number_input("🔢 Jumlah Prompt", min_value=1, max_value=100, value=5)
 
+# Tombol Eksekusi
 if st.button("🚀 Generate Prompts", type="primary"):
     if not API_KEYS:
-        st.error("⚠️ API Key kosong!")
+        st.error("⚠️ API Key belum dimasukkan! Cek Sidebar.")
     elif not topic:
-        st.error("⚠️ Topik harus diisi!")
+        st.error("⚠️ Topik wajib diisi.")
     else:
-        with st.spinner("Sedang memproses..."):
+        with st.spinner("AI sedang bekerja..."):
             prompts = run_generation(topic, mode_key, trend, qty)
             
             if prompts:
                 st.success(f"Selesai! {len(prompts)} prompt berhasil dibuat.")
                 
-                # --- BAGIAN DOWNLOAD FILE ---
-                # Kita format stringnya agar rapi saat didownload (pakai nomor)
-                txt_content = ""
+                # --- A. AREA DOWNLOAD (TXT) ---
+                txt_buffer = ""
                 for idx, p in enumerate(prompts, 1):
-                    txt_content += f"{idx}. {p}\n\n"
-                
+                    txt_buffer += f"{idx}. {p}\n\n"
+                    
                 st.download_button(
                     label="📥 Download File .txt",
-                    data=txt_content,
+                    data=txt_buffer,
                     file_name=f"prompts_{topic.replace(' ', '_')}.txt",
                     mime="text/plain"
                 )
                 
                 st.markdown("---")
-                st.markdown("### 📋 Hasil (Klik icon 'copy' di pojok kanan kotak)")
-
-                # --- BAGIAN TAMPILAN 1 BLOK 1 TOMBOL COPY ---
+                st.subheader("📋 Hasil Prompt (Siap Copy)")
+                
+                # --- B. AREA TAMPILAN 1 BLOK 1 TOMBOL COPY ---
                 for idx, p in enumerate(prompts, 1):
-                    # Menulis label nomor
                     st.write(f"**Prompt #{idx}**")
-                    # Menulis code block (ini otomatis ada tombol copynya di Streamlit)
+                    # st.code otomatis membuat blok kode dengan tombol copy di kanan atas
                     st.code(p, language="text")
