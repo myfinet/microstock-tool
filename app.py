@@ -2,16 +2,16 @@ import streamlit as st
 import google.generativeai as genai
 import json
 import time
+import re
 
 # --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(
     page_title="Microstock Prompt Lite", 
-    page_icon="⚡", 
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon="🛠️", 
+    layout="wide"
 )
 
-# --- 2. DEFINISI DATA & MODE ---
+# --- 2. DEFINISI MODE VISUAL ---
 VISUAL_MODES = {
     "1": {"name": "Isolated Object (Siap Slice)", "keywords": "white background, studio lighting, no shadow, isolated on white", "ar": "--ar 1:1"},
     "2": {"name": "Copy Space (Space Iklan)", "keywords": "minimalist, wide shot, rule of thirds, negative space on the side", "ar": "--ar 16:9"},
@@ -20,177 +20,158 @@ VISUAL_MODES = {
     "5": {"name": "Infographic & Isometric", "keywords": "isometric view, 3d vector render, gradient glass texture, tech startup vibe, --no text letters", "ar": "--ar 16:9"}
 }
 
-# --- 3. LOGIKA API KEY (SUPER ROBUST) ---
+# --- 3. LOGIKA API KEY (SUPER AMAN) ---
 def load_api_keys():
-    """Membaca API Key dari Secrets atau Input Manual dengan penanganan error ganda."""
     keys = []
     source = "Manual"
     
-    # Cek Secrets (Prioritas Utama)
+    # Coba baca Secrets
     try:
         if "api_keys" in st.secrets:
             secret_val = st.secrets["api_keys"]
-            
-            # SKENARIO A: Format List (TOML array) -> ["key1", "key2"]
+            # Jika List
             if isinstance(secret_val, list):
                 keys = [str(k).strip() for k in secret_val if str(k).strip()]
                 source = "Secrets (List)"
-                
-            # SKENARIO B: Format String -> "key1,key2,key3"
+            # Jika String (dipisah koma)
             elif isinstance(secret_val, str):
-                # Pecah berdasarkan koma, hapus spasi kiri/kanan
                 keys = [k.strip() for k in secret_val.split(',') if k.strip()]
                 source = "Secrets (String)"
     except Exception as e:
-        st.sidebar.error(f"Error membaca Secrets: {e}")
+        st.sidebar.error(f"⚠️ Gagal baca Secrets: {e}")
 
     return keys, source
 
-# Load Keys saat aplikasi mulai
 API_KEYS, key_source = load_api_keys()
 
-# Tampilan Sidebar
-st.sidebar.header("⚡ Konfigurasi API")
-
+# Sidebar
+st.sidebar.header("🛠️ Konfigurasi & Status")
 if API_KEYS:
-    st.sidebar.success(f"✅ Terhubung via {key_source}")
-    st.sidebar.info(f"🔑 {len(API_KEYS)} Key Aktif\n⚡ Kecepatan: {len(API_KEYS) * 15} prompt/menit")
+    st.sidebar.success(f"✅ {len(API_KEYS)} Key terdeteksi ({key_source})")
 else:
-    st.sidebar.warning("⚠️ Secrets kosong/tidak ditemukan.")
-    st.sidebar.markdown("**Opsi Cadangan (Manual):**")
-    input_manual = st.sidebar.text_area("Paste API Keys (Pisahkan koma)", height=100)
+    st.sidebar.warning("⚠️ Tidak ada Key di Secrets.")
+    input_manual = st.sidebar.text_area("Input Key Manual (Pisahkan koma)", height=100)
     if input_manual:
         API_KEYS = [k.strip() for k in input_manual.split(',') if k.strip()]
-        if API_KEYS:
-            st.sidebar.success(f"✅ {len(API_KEYS)} Key Manual Dimuat!")
+        if API_KEYS: st.sidebar.success(f"✅ {len(API_KEYS)} Key Manual dipakai.")
 
-# --- 4. FUNGSI GENERATOR AI ---
-def get_model(api_key):
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(
-        model_name="gemini-1.5-flash", 
-        generation_config={"response_mime_type": "application/json"}
-    )
+# --- 4. FUNGSI EKSTRAK JSON (REGEX) ---
+def extract_json(text_response):
+    """Mencari pola {...} di dalam teks, mengabaikan teks sampah lainnya."""
+    try:
+        # Cari text yang diawali kurung kurawal { dan diakhiri }
+        match = re.search(r'\{.*\}', text_response, re.DOTALL)
+        if match:
+            json_str = match.group(0)
+            return json.loads(json_str)
+        else:
+            return None
+    except Exception:
+        return None
 
-def clean_json_text(text_response):
-    """Pembersih output JSON dari AI."""
-    clean = text_response.strip()
-    # Hapus markdown ```json jika ada
-    if clean.startswith("```json"): clean = clean[7:]
-    elif clean.startswith("```"): clean = clean[3:]
-    if clean.endswith("```"): clean = clean[:-3]
-    return clean.strip()
-
-def create_sys_prompt(topic, mode_data, trend=""):
-    return f"""
-    Task: Create 1 Midjourney prompt description only.
-    Topic: "{topic}"
-    Style: "{mode_data['name']}" {f'+ Trend: {trend}' if trend else ''}
-    Mandatory Params: {mode_data['keywords']} {mode_data['ar']} --v 6.0
-    
-    INSTRUCTION:
-    - Do NOT use '/imagine prompt:' prefix.
-    - Return output in strictly Valid JSON format: {{ "prompt": "your prompt text here" }}
-    """
-
+# --- 5. FUNGSI GENERATOR ---
 def run_generation(topic, mode_key, trend, qty):
     mode_data = VISUAL_MODES[mode_key]
     results = []
     
     progress_bar = st.progress(0)
-    status_text = st.empty()
+    status_box = st.empty()
+    error_box = st.container() # Area khusus log error
     
     key_index = 0
-    
-    # --- PENGATURAN KECEPATAN (DELAY) ---
-    # Jika 1 Key: Delay 4 detik (Sangat aman)
-    # Jika 3 Key: Delay 1.5 detik (Cepat tapi Aman)
-    current_delay = 4.0 if len(API_KEYS) < 2 else 1.5
+    current_delay = 4.0 if len(API_KEYS) < 2 else 1.0 # Lebih cepat jika banyak key
     
     for i in range(qty):
-        status_text.text(f"⚡ Meracik prompt {i+1} dari {qty}...")
+        status_box.info(f"🔄 Sedang memproses prompt {i+1} / {qty}...")
         success = False
-        
-        # Retry Logic (Rotasi Key)
         attempts = 0
-        max_attempts = len(API_KEYS) * 2 # Kesempatan mencoba 2x putaran kunci
+        max_attempts = len(API_KEYS) * 2 
         
         while not success and attempts < max_attempts:
-            # Pastikan index tidak melebihi jumlah key (Looping/Modulo)
             current_key_idx = (key_index + attempts) % len(API_KEYS)
             current_key = API_KEYS[current_key_idx]
             
             try:
-                model = get_model(current_key)
-                sys_msg = create_sys_prompt(topic, mode_data, trend)
-                response = model.generate_content(sys_msg)
+                # Setup Model
+                genai.configure(api_key=current_key)
+                model = genai.GenerativeModel("gemini-1.5-flash")
                 
-                clean_txt = clean_json_text(response.text)
-                data = json.loads(clean_txt)
+                # Prompt Engineering
+                sys_prompt = f"""
+                You are a prompt generator.
+                Task: Create 1 Midjourney prompt for Topic: "{topic}", Style: "{mode_data['name']}" {f', Trend: {trend}' if trend else ''}.
+                Mandatory: {mode_data['keywords']} {mode_data['ar']} --v 6.0
                 
-                final_prompt = data.get('prompt', 'Error parsing prompt')
-                results.append(final_prompt)
+                IMPORTANT: Return ONLY a valid JSON format like this:
+                {{ "prompt": "your prompt description here" }}
+                """
                 
-                success = True
-                # Update key index global agar request selanjutnya pakai key berikutnya
-                key_index = (current_key_idx + 1) % len(API_KEYS)
+                response = model.generate_content(sys_prompt)
                 
-                # Jeda Waktu Aman
-                time.sleep(current_delay) 
+                # Ekstraksi Data
+                data = extract_json(response.text)
+                
+                if data and 'prompt' in data:
+                    clean_p = data['prompt'].replace('/imagine prompt:', '').strip()
+                    results.append(clean_p)
+                    success = True
+                    # Geser index key untuk prompt berikutnya (Load Balancing)
+                    key_index = (current_key_idx + 1) % len(API_KEYS)
+                    time.sleep(current_delay)
+                else:
+                    raise ValueError("AI tidak memberikan JSON valid.")
                 
             except Exception as e:
-                # print(f"Key-{current_key_idx} gagal. Coba key lain...") # Debug
-                attempts += 1 # Coba key berikutnya
+                # TAMPILKAN ERROR NYATA DI LAYAR UNTUK DEBUGGING
+                error_msg = str(e)
+                # Sembunyikan sebagian key asli agar aman
+                masked_key = current_key[:5] + "..." 
+                
+                if "429" in error_msg:
+                    print(f"Key {masked_key} Limit Habis. Ganti key...")
+                elif "400" in error_msg:
+                    error_box.error(f"❌ Key Invalid ({masked_key}). Cek copas Anda!")
+                else:
+                    print(f"Error lain pada Key {masked_key}: {error_msg}")
+                
+                attempts += 1
+                time.sleep(1) # Jeda sebentar sebelum retry
         
         if not success:
-            st.error(f"❌ Gagal pada prompt ke-{i+1}. Semua API Key sedang sibuk/limit.")
+            st.error(f"❌ Gagal Total pada Prompt #{i+1}. Semua Key Error/Limit.")
             break
             
         progress_bar.progress((i + 1) / qty)
         
-    status_text.empty()
+    status_box.empty()
     return results
 
-# --- 5. ANTARMUKA UTAMA (UI) ---
-st.title("⚡ Microstock Prompt Lite")
-st.markdown("---")
+# --- 6. UI UTAMA ---
+st.title("🛠️ Microstock Prompt (Debug Mode)")
+st.caption("Jika masih error, screenshot pesan merah yang muncul dan kirim ke saya.")
 
 col1, col2 = st.columns(2)
 with col1:
-    topic = st.text_input("💡 Topik Utama", placeholder="Contoh: Imlek Kuda Api")
-    mode_key = st.selectbox("🎨 Mode Visual", list(VISUAL_MODES.keys()), format_func=lambda x: VISUAL_MODES[x]['name'])
+    topic = st.text_input("💡 Topik", "Imlek Kuda Api")
+    mode_key = st.selectbox("🎨 Mode", list(VISUAL_MODES.keys()), format_func=lambda x: VISUAL_MODES[x]['name'])
 with col2:
-    trend = st.text_input("📈 Trend (Opsional)", placeholder="Contoh: Cyberpunk, Pastel")
-    qty = st.number_input("🔢 Jumlah Prompt", min_value=1, max_value=100, value=5)
+    trend = st.text_input("📈 Trend", "")
+    qty = st.number_input("🔢 Jumlah", 1, 100, 5)
 
 if st.button("🚀 Generate Prompts", type="primary"):
     if not API_KEYS:
-        st.error("⚠️ API Key belum dimasukkan! Cek Sidebar atau Secrets.")
-    elif not topic:
-        st.error("⚠️ Topik wajib diisi.")
+        st.error("🚫 API Key Kosong! Masukkan di Sidebar atau Secrets.")
     else:
-        with st.spinner("AI sedang bekerja..."):
-            prompts = run_generation(topic, mode_key, trend, qty)
+        results = run_generation(topic, mode_key, trend, qty)
+        
+        if results:
+            st.success(f"Berhasil membuat {len(results)} prompt!")
             
-            if prompts:
-                st.success(f"Selesai! {len(prompts)} prompt berhasil dibuat.")
-                
-                # DOWNLOAD TXT
-                txt_buffer = ""
-                for idx, p in enumerate(prompts, 1):
-                    txt_buffer += f"{idx}. {p}\n\n"
-                    
-                st.download_button(
-                    label="📥 Download File .txt",
-                    data=txt_buffer,
-                    file_name=f"prompts_{topic.replace(' ', '_')}.txt",
-                    mime="text/plain"
-                )
-                
-                st.markdown("---")
-                st.subheader("📋 Hasil Prompt")
-                
-                # TAMPILAN BLOK KODE (Sesuai Request)
-                for idx, p in enumerate(prompts, 1):
-                    st.write(f"**Prompt #{idx}**")
-                    st.code(p, language="text")
+            # Area Download
+            txt_out = "\n\n".join([f"{i+1}. {p}" for i, p in enumerate(results)])
+            st.download_button("📥 Download .txt", txt_out, f"prompts.txt")
+            
+            # Area Copy
+            for i, p in enumerate(results):
+                st.write(f"**Prompt #{i+1}**")
+                st.code(p, language="text")
