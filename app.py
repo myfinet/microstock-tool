@@ -1,11 +1,10 @@
 import streamlit as st
 import google.generativeai as genai
-import pandas as pd
 import json
 import time
 
 # --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Microstock Engine", page_icon="🎨", layout="wide")
+st.set_page_config(page_title="Microstock Prompt Lite", page_icon="⚡", layout="wide")
 
 # --- DEFINISI MODE VISUAL ---
 VISUAL_MODES = {
@@ -16,43 +15,38 @@ VISUAL_MODES = {
     "5": {"name": "Infographic & Isometric", "keywords": "isometric view, 3d vector render, gradient glass texture, tech startup vibe, --no text letters", "ar": "--ar 16:9"}
 }
 
-# --- LOGIKA API KEY (HYBRID: SECRETS ATAU MANUAL) ---
-st.sidebar.header("🔑 Konfigurasi API")
-
+# --- LOGIKA API KEY (HYBRID) ---
+st.sidebar.header("⚡ Konfigurasi API")
 API_KEYS = []
 raw_keys = ""
 
-# 1. Cek apakah ada di Secrets (Prioritas Utama)
+# Prioritas 1: Ambil dari Secrets Cloud
 if "api_keys" in st.secrets:
     raw_keys = st.secrets["api_keys"]
-    st.sidebar.success(f"✅ Menggunakan API Key dari Database Aman (Secrets).")
-# 2. Jika tidak ada di Secrets, tampilkan Input Manual
+    st.sidebar.success(f"✅ Menggunakan {len(raw_keys.split(','))} Key dari Cloud.")
+# Prioritas 2: Input Manual
 else:
-    st.sidebar.info("ℹ️ Masukkan API Key di bawah ini (pisahkan dengan koma jika lebih dari satu).")
-    raw_keys = st.sidebar.text_area("API Keys", placeholder="Key1,Key2,Key3", help="Paste key Anda di sini. Satu baris dipisah koma.")
+    st.sidebar.info("Masukkan API Key (pisahkan koma).")
+    raw_keys = st.sidebar.text_area("API Keys", placeholder="Key1,Key2,Key3")
 
-# Proses string menjadi list
 if raw_keys:
+    # Membersihkan spasi dan memisahkan koma
     API_KEYS = [k.strip() for k in raw_keys.split(',') if k.strip()]
-    if "api_keys" not in st.secrets:
-        st.sidebar.success(f"✅ {len(API_KEYS)} Key siap digunakan.")
 
 # --- FUNGSI GENERATOR ---
 def get_model(api_key):
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(model_name="gemini-1.5-flash", generation_config={"response_mime_type": "application/json"})
 
-def create_system_prompt(topic, mode_data, trend=""):
+def create_lite_prompt(topic, mode_data, trend=""):
+    # Prompt super pendek agar hemat & cepat
     return f"""
-    Role: Microstock Expert. Task: Create asset data for Topic: "{topic}", Mode: "{mode_data['name']}", Trend: "{trend}".
-    RETURN JSON ONLY:
-    {{
-        "midjourney_prompt": "Visual description + {mode_data['keywords']} + {mode_data['ar']} --v 6.0",
-        "title": "SEO Title (English, Max 70 chars)",
-        "keywords": "47 keywords (English, comma separated)",
-        "social_caption": "Caption (Indonesian) + CTA",
-        "hashtags": "#hashtags"
-    }}
+    Task: Create 1 Midjourney prompt.
+    Topic: "{topic}"
+    Style: "{mode_data['name']}" + {trend}
+    Mandatory Params: {mode_data['keywords']} {mode_data['ar']} --v 6.0
+    
+    RETURN JSON ONLY: {{ "prompt": "Your_Prompt_Here" }}
     """
 
 def run_generation(topic, mode_key, trend, qty):
@@ -63,27 +57,29 @@ def run_generation(topic, mode_key, trend, qty):
     key_index = 0
     
     for i in range(qty):
-        status_text.text(f"⏳ Membuat aset ke-{i+1} dari {qty}...")
+        status_text.text(f"⚡ Generating prompt {i+1}/{qty}...")
         success = False
         
-        # Loop untuk mencoba key satu per satu jika error (Key Rotation)
         while not success and key_index < len(API_KEYS):
             current_key = API_KEYS[key_index]
             try:
                 model = get_model(current_key)
-                prompt = create_system_prompt(topic, mode_data, trend)
-                response = model.generate_content(prompt)
+                sys_prompt = create_lite_prompt(topic, mode_data, trend)
+                response = model.generate_content(sys_prompt)
+                
                 data = json.loads(response.text)
-                results.append(data)
+                
+                # Bersihkan format jika ada sisa '/imagine'
+                clean_prompt = data['prompt'].replace('/imagine prompt:', '').strip()
+                results.append(clean_prompt)
+                
                 success = True
-                time.sleep(5) # Jeda aman
-            except Exception as e:
-                # Jika error, pindah ke key berikutnya
-                print(f"Key index {key_index} error: {e}")
-                key_index += 1 
+                time.sleep(5) # Jeda ringan
+            except Exception:
+                key_index += 1 # Ganti key jika error
         
         if not success:
-            st.error("❌ Semua API Key habis atau error! Cek kuota atau input Anda.")
+            st.error("❌ Semua API Key limit/habis. Tambahkan key baru.")
             break
             
         progress_bar.progress((i + 1) / qty)
@@ -92,7 +88,7 @@ def run_generation(topic, mode_key, trend, qty):
     return results
 
 # --- UI UTAMA ---
-st.title("🎨 AI Microstock Engine")
+st.title("⚡ Microstock Prompt Lite")
 st.markdown("---")
 
 col1, col2 = st.columns(2)
@@ -100,36 +96,40 @@ with col1:
     topic = st.text_input("💡 Topik", placeholder="Misal: Imlek Kuda Api")
     mode_key = st.selectbox("🎨 Mode Visual", list(VISUAL_MODES.keys()), format_func=lambda x: VISUAL_MODES[x]['name'])
 with col2:
-    trend = st.text_input("📈 Trend Injector (Opsional)", placeholder="Misal: Cyberpunk, Pastel")
-    qty = st.number_input("🔢 Jumlah Variasi", 1, 100, 5)
+    trend = st.text_input("📈 Trend (Opsional)", placeholder="Misal: Cyberpunk")
+    qty = st.number_input("🔢 Jumlah", 1, 100, 5)
 
-if st.button("🚀 Generate Aset", type="primary"):
+if st.button("🚀 Generate Prompts", type="primary"):
     if not API_KEYS:
-        st.error("⚠️ API Key kosong! Masukkan key di sidebar sebelah kiri atau atur Secrets.")
+        st.error("⚠️ API Key kosong!")
     elif not topic:
-        st.error("⚠️ Topik belum diisi!")
+        st.error("⚠️ Topik harus diisi!")
     else:
-        with st.spinner("Sedang meracik prompt & metadata..."):
-            data = run_generation(topic, mode_key, trend, qty)
+        with st.spinner("Sedang memproses..."):
+            prompts = run_generation(topic, mode_key, trend, qty)
             
-            if data:
-                # Tampilkan Preview Data Frame
-                df = pd.DataFrame(data)
-                st.success(f"Selesai! {len(data)} aset berhasil dibuat.")
-                st.dataframe(df)
+            if prompts:
+                st.success(f"Selesai! {len(prompts)} prompt berhasil dibuat.")
                 
-                # Tombol Download
+                # --- BAGIAN DOWNLOAD FILE ---
+                # Kita format stringnya agar rapi saat didownload (pakai nomor)
+                txt_content = ""
+                for idx, p in enumerate(prompts, 1):
+                    txt_content += f"{idx}. {p}\n\n"
+                
                 st.download_button(
-                    label="📥 Download CSV Lengkap",
-                    data=df.to_csv(index=False).encode('utf-8'),
-                    file_name=f"microstock_{topic.replace(' ', '_')}.csv",
-                    mime="text/csv"
+                    label="📥 Download File .txt",
+                    data=txt_content,
+                    file_name=f"prompts_{topic.replace(' ', '_')}.txt",
+                    mime="text/plain"
                 )
                 
-                # Preview Prompt Text
-                st.markdown("### 📝 Quick Copy Prompts")
-                for d in data:
-                    with st.expander(f"Prompt: {d['title']}"):
-                        st.code(d['midjourney_prompt'])
-                        st.caption(f"Keywords: {d['keywords']}")
+                st.markdown("---")
+                st.markdown("### 📋 Hasil (Klik icon 'copy' di pojok kanan kotak)")
 
+                # --- BAGIAN TAMPILAN 1 BLOK 1 TOMBOL COPY ---
+                for idx, p in enumerate(prompts, 1):
+                    # Menulis label nomor
+                    st.write(f"**Prompt #{idx}**")
+                    # Menulis code block (ini otomatis ada tombol copynya di Streamlit)
+                    st.code(p, language="text")
