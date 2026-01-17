@@ -1,145 +1,129 @@
 import streamlit as st
 import google.generativeai as genai
 import time
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-st.set_page_config(page_title="Microstock Engine Auto", page_icon="🤖", layout="wide")
+# ==========================================
+# 1. KONFIGURASI HALAMAN & STYLE
+# ==========================================
+st.set_page_config(
+    page_title="Microstock Prompt Pro",
+    page_icon="🎨",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-st.title("🤖 Microstock Engine (Auto-Model)")
-st.info("Script ini akan mencari model yang tersedia secara otomatis.")
+# Custom CSS untuk tampilan lebih rapi
+st.markdown("""
+<style>
+    .stCodeBlock {margin-bottom: 0px;}
+    .reportview-container {background: #0e1117;}
+    div[data-testid="stExpander"] div[role="button"] p {font-size: 1rem; font-weight: bold;}
+</style>
+""", unsafe_allow_html=True)
 
-# --- 1. SETUP API KEY ---
-st.sidebar.header("🔑 Setup Key")
-raw_keys = st.sidebar.text_area("Paste 10 Key Anda:", height=150)
+# ==========================================
+# 2. LOGIKA UTAMA (ENGINE)
+# ==========================================
 
-CLEAN_KEYS = []
-if raw_keys:
-    # Bersihkan input
-    candidates = raw_keys.replace('\n', ',').split(',')
+# A. Pembersih Key Otomatis
+def clean_api_keys(raw_text):
+    if not raw_text: return []
+    # Ubah baris baru jadi koma, pisah koma, hapus spasi & kutip
+    candidates = raw_text.replace('\n', ',').split(',')
+    cleaned = []
     for c in candidates:
         k = c.strip().replace('"', '').replace("'", "")
+        # Validasi format dasar Google Key
         if k.startswith("AIza") and len(k) > 30:
-            CLEAN_KEYS.append(k)
+            cleaned.append(k)
+    return list(set(cleaned)) # Hapus duplikat
 
-    if CLEAN_KEYS:
-        st.sidebar.success(f"✅ {len(CLEAN_KEYS)} Key Valid")
-    else:
-        st.sidebar.error("❌ Format Key Salah")
-
-# --- 2. FUNGSI PENCARI MODEL (OBAT 404) ---
-def get_available_model(api_key):
-    """Bertanya ke Google: Model apa yang boleh saya pakai?"""
+# B. Auto-Discovery Model (Anti-404)
+# Mencari model terbaik yang tersedia di akun, menggunakan protokol REST
+@st.cache_resource
+def get_best_model(_api_key):
     try:
-        # PENTING: Pakai transport='rest' agar tembus firewall
-        genai.configure(api_key=api_key, transport='rest')
+        # Wajib pakai REST agar tembus firewall Streamlit
+        genai.configure(api_key=_api_key, transport='rest')
         
-        # Ambil daftar model
-        for m in genai.list_models():
-            # Cari model yang bisa generate text (generateContent)
-            if 'generateContent' in m.supported_generation_methods:
-                # Prioritaskan Flash jika ada, tapi terima apa saja
-                if 'flash' in m.name: return m.name
-                if 'gemini-1.5' in m.name: return m.name
+        models = list(genai.list_models())
+        available = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
         
-        # Jika loop selesai tapi belum return, ambil model pertama yg generateContent
-        for m in genai.list_models():
-             if 'generateContent' in m.supported_generation_methods:
-                 return m.name
-                 
-    except Exception as e:
-        return None
-    return "models/gemini-pro" # Fallback terakhir
+        # Prioritas Model (Flash -> Pro -> Apapun yang ada)
+        for m in available:
+            if 'flash' in m and '1.5' in m: return m
+        for m in available:
+            if 'flash' in m: return m
+        for m in available:
+            if 'pro' in m and '1.5' in m: return m
+            
+        return available[0] if available else "models/gemini-1.5-flash"
+    except:
+        return "models/gemini-1.5-flash" # Fallback
 
-# --- 3. GENERATOR LOGIC ---
-VISUAL_MODES = {
-    "1": {"name": "Isolated Object", "keywords": "white background, studio lighting", "ar": "--ar 1:1"},
-    "2": {"name": "Copy Space", "keywords": "minimalist, negative space", "ar": "--ar 16:9"},
-    "3": {"name": "Social Media", "keywords": "flatlay, aesthetic", "ar": "--ar 4:5"},
-    "4": {"name": "Line Art", "keywords": "thick outline, black and white", "ar": "--ar 1:1"},
-    "5": {"name": "Isometric", "keywords": "isometric view, 3d vector", "ar": "--ar 16:9"}
+# C. Konfigurasi Safety (Agar prompt tidak diblokir sensor)
+SAFETY_SETTINGS = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-def run_gen(topic, mode_key, trend, qty):
-    mode = VISUAL_MODES[mode_key]
-    results = []
-    log = st.expander("Logs", expanded=True)
-    pbar = st.progress(0)
-    key_idx = 0
-    
-    # Cache model name agar tidak search terus
-    active_model_name = None
+# ==========================================
+# 3. SIDEBAR: SETUP API
+# ==========================================
+st.sidebar.header("🔑 API Configuration")
+st.sidebar.caption("Paste API Key Anda di bawah ini (bisa sekaligus banyak).")
 
-    for i in range(qty):
-        success = False
-        attempts = 0
-        
-        while not success and attempts < len(CLEAN_KEYS):
-            current_key = CLEAN_KEYS[key_idx]
-            masked = f"...{current_key[-4:]}"
-            
-            try:
-                # 1. Cari Model dulu jika belum ketemu
-                if not active_model_name:
-                    found = get_available_model(current_key)
-                    if found:
-                        active_model_name = found
-                        log.info(f"🧠 Menggunakan Model: {active_model_name}")
-                    else:
-                        active_model_name = "models/gemini-pro"
+# Menggunakan Session State agar key tidak hilang saat refresh/klik tombol
+if 'api_keys' not in st.session_state:
+    st.session_state.api_keys = []
 
-                # 2. Konfigurasi
-                genai.configure(api_key=current_key, transport='rest')
-                model = genai.GenerativeModel(active_model_name)
-                
-                # 3. Generate
-                prompt = f"Create 1 Midjourney prompt for: {topic}. Style: {mode['name']}. No intro."
-                response = model.generate_content(prompt)
-                
-                if response.text:
-                    res_text = response.text.strip().replace('"','').replace('*','')
-                    results.append(res_text)
-                    log.success(f"✅ Prompt #{i+1} OK (Key: {masked})")
-                    success = True
-            
-            except Exception as e:
-                err = str(e)
-                if "404" in err:
-                    # Model salah, reset cache model biar cari lagi
-                    active_model_name = None 
-                    log.warning("⚠️ Model not found, mencari ulang...")
-                elif "429" in err:
-                    log.warning(f"⚠️ Limit (Key: {masked})")
-                else:
-                    log.error(f"❌ Error (Key: {masked}): {err}")
-            
-            key_idx = (key_idx + 1) % len(CLEAN_KEYS)
-            
-            if success: break
-            else: attempts += 1
-        
-        if not success:
-            st.error(f"Gagal Prompt #{i+1}")
-            break
-        
-        pbar.progress((i+1)/qty)
-        
-    return results
+raw_input = st.sidebar.text_area("API Keys:", height=150, help="Format: AIzaSy...", placeholder="Paste daftar key di sini...")
 
-# --- UI ---
-col1, col2 = st.columns(2)
-with col1:
-    topic = st.text_input("Topik", "Cat")
-    mode = st.selectbox("Mode", list(VISUAL_MODES.keys()))
-with col2:
-    trend = st.text_input("Trend")
-    qty = st.number_input("Jml", 1, 10, 1)
-
-if st.button("🚀 GENERATE"):
-    if not CLEAN_KEYS:
-        st.error("Masukkan Key di Sidebar!")
+if raw_input:
+    keys = clean_api_keys(raw_input)
+    if keys:
+        st.session_state.api_keys = keys
+        st.sidebar.success(f"✅ {len(keys)} Key Siap Digunakan")
+        
+        # Deteksi Model di background
+        active_model = get_best_model(keys[0])
+        st.sidebar.info(f"🧠 Engine: `{active_model.split('/')[-1]}`")
     else:
-        res = run_gen(topic, mode, trend, qty)
-        if res:
-            st.success("Selesai!")
-            for idx, p in enumerate(res):
-                st.write(f"**#{idx+1}**")
-                st.code(p, language="text")
+        st.sidebar.error("❌ Format Key tidak valid (Harus diawali 'AIza')")
+
+# ==========================================
+# 4. PRESET MODE VISUAL (Optimized for Stock)
+# ==========================================
+VISUAL_MODES = {
+    "isolated": {
+        "label": "📦 Isolated Object (Asset)",
+        "desc": "White background, clean cut, no shadow, commercial use",
+        "prompt": "isolated on plain white background, studio lighting, commercial photography, ultra detailed, 8k, sharp focus, no shadow, --ar 1:1"
+    },
+    "copyspace": {
+        "label": "📝 Copy Space (Background)",
+        "desc": "Wide shot, minimalist, room for text placement",
+        "prompt": "minimalist composition, wide angle, negative space on the side for text, soft lighting, professional stock photo, high resolution, --ar 16:9"
+    },
+    "flatlay": {
+        "label": "📸 Flatlay / Social Media",
+        "desc": "Top-down view, organized items, aesthetic",
+        "prompt": "knolling photography, flat lay, top down view, aesthetic arrangement, soft shadows, instagram style, trending on pinterest, --ar 4:5"
+    },
+    "vector": {
+        "label": "🎨 Vector / Illustration",
+        "desc": "Flat design, sticker style, simple lines",
+        "prompt": "vector art style, flat design, thick outline, sticker design, white background, adobe illustrator style, simple and clean, --ar 1:1"
+    },
+    "3d_icon": {
+        "label": "🧊 3D Icon / Isometric",
+        "desc": "Cute 3D render, clay texture or glass",
+        "prompt": "3d isometric icon, claymorphism, soft gradient lighting, cute 3d render, c4d, blender style, colorful, --ar 1:1"
+    }
+}
+
+# ==========================================
+# 5. UI UTAMA
