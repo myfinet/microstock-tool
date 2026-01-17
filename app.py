@@ -46,11 +46,12 @@ else:
 
 # PILIHAN MODEL (Auto Fallback)
 # Kita prioritaskan Gemini 2.0 Flash Experimental (Terbaru & Tercepat)
+
 MODELS_PRIORITY = [
-    "gemini-2.0-flash-exp",   # Prioritas 1: Paling Baru (Cepat)
-    "gemini-1.5-flash",       # Prioritas 2: Standar Stabil
-    "gemini-1.5-flash-latest",# Variasi nama
-    "gemini-pro"              # Prioritas 3: Versi Lama (Fallback)
+    "gemini-1.5-flash",       # <--- PINDAHKAN INI KE PALING ATAS (Lebih Stabil)
+    "gemini-1.5-flash-latest",
+    "gemini-2.0-flash-exp",   # <--- Turunkan ini ke bawah (Cuma buat cadangan)
+    "gemini-pro"
 ]
 
 # --- 4. FUNGSI SMART GENERATOR ---
@@ -177,3 +178,4 @@ if st.button("🚀 Generate Prompts", type="primary"):
             for i, p in enumerate(res):
                 st.write(f"**Prompt #{i+1}**")
                 st.code(p, language="text")
+
