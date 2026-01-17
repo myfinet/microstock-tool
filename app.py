@@ -16,16 +16,26 @@ VISUAL_MODES = {
     "5": {"name": "Infographic & Isometric", "keywords": "isometric view, 3d vector render, gradient glass texture, tech startup vibe, --no text letters", "ar": "--ar 16:9"}
 }
 
-# --- LOGIKA API KEY (REVISI: BACA SATU BARIS KOMA) ---
+# --- LOGIKA API KEY (HYBRID: SECRETS ATAU MANUAL) ---
+st.sidebar.header("🔑 Konfigurasi API")
+
+API_KEYS = []
+raw_keys = ""
+
+# 1. Cek apakah ada di Secrets (Prioritas Utama)
 if "api_keys" in st.secrets:
-    # Mengambil string tunggal: "key1,key2,key3"
     raw_keys = st.secrets["api_keys"]
-    # Memecahnya berdasarkan koma (,) dan menghapus spasi jika ada
-    API_KEYS = [k.strip() for k in raw_keys.split(',') if k.strip()]
-    st.sidebar.success(f"✅ Terhubung: {len(API_KEYS)} API Key aktif.")
+    st.sidebar.success(f"✅ Menggunakan API Key dari Database Aman (Secrets).")
+# 2. Jika tidak ada di Secrets, tampilkan Input Manual
 else:
-    st.sidebar.warning("⚠️ Belum ada API Key di Secrets.")
-    API_KEYS = []
+    st.sidebar.info("ℹ️ Masukkan API Key di bawah ini (pisahkan dengan koma jika lebih dari satu).")
+    raw_keys = st.sidebar.text_area("API Keys", placeholder="Key1,Key2,Key3", help="Paste key Anda di sini. Satu baris dipisah koma.")
+
+# Proses string menjadi list
+if raw_keys:
+    API_KEYS = [k.strip() for k in raw_keys.split(',') if k.strip()]
+    if "api_keys" not in st.secrets:
+        st.sidebar.success(f"✅ {len(API_KEYS)} Key siap digunakan.")
 
 # --- FUNGSI GENERATOR ---
 def get_model(api_key):
@@ -39,7 +49,7 @@ def create_system_prompt(topic, mode_data, trend=""):
     {{
         "midjourney_prompt": "Visual description + {mode_data['keywords']} + {mode_data['ar']} --v 6.0",
         "title": "SEO Title (English, Max 70 chars)",
-        "keywords": "50 keywords (English, comma separated)",
+        "keywords": "47 keywords (English, comma separated)",
         "social_caption": "Caption (Indonesian) + CTA",
         "hashtags": "#hashtags"
     }}
@@ -53,8 +63,10 @@ def run_generation(topic, mode_key, trend, qty):
     key_index = 0
     
     for i in range(qty):
-        status_text.text(f"⏳ Membuat aset ke-{i+1}...")
+        status_text.text(f"⏳ Membuat aset ke-{i+1} dari {qty}...")
         success = False
+        
+        # Loop untuk mencoba key satu per satu jika error (Key Rotation)
         while not success and key_index < len(API_KEYS):
             current_key = API_KEYS[key_index]
             try:
@@ -64,14 +76,16 @@ def run_generation(topic, mode_key, trend, qty):
                 data = json.loads(response.text)
                 results.append(data)
                 success = True
-                time.sleep(1)
-            except Exception:
+                time.sleep(1) # Jeda aman
+            except Exception as e:
                 # Jika error, pindah ke key berikutnya
+                print(f"Key index {key_index} error: {e}")
                 key_index += 1 
         
         if not success:
-            st.error("❌ Semua API Key habis atau error!")
+            st.error("❌ Semua API Key habis atau error! Cek kuota atau input Anda.")
             break
+            
         progress_bar.progress((i + 1) / qty)
         
     status_text.empty()
@@ -79,26 +93,42 @@ def run_generation(topic, mode_key, trend, qty):
 
 # --- UI UTAMA ---
 st.title("🎨 AI Microstock Engine")
+st.markdown("---")
+
 col1, col2 = st.columns(2)
 with col1:
     topic = st.text_input("💡 Topik", placeholder="Misal: Imlek Kuda Api")
-    mode_key = st.selectbox("🎨 Mode", list(VISUAL_MODES.keys()), format_func=lambda x: VISUAL_MODES[x]['name'])
+    mode_key = st.selectbox("🎨 Mode Visual", list(VISUAL_MODES.keys()), format_func=lambda x: VISUAL_MODES[x]['name'])
 with col2:
-    trend = st.text_input("📈 Trend (Opsional)")
-    qty = st.number_input("Jumlah", 1, 50, 5)
+    trend = st.text_input("📈 Trend Injector (Opsional)", placeholder="Misal: Cyberpunk, Pastel")
+    qty = st.number_input("🔢 Jumlah Variasi", 1, 100, 5)
 
-if st.button("🚀 Generate", type="primary"):
+if st.button("🚀 Generate Aset", type="primary"):
     if not API_KEYS:
-        st.error("API Key belum disetting di Secrets!")
+        st.error("⚠️ API Key kosong! Masukkan key di sidebar sebelah kiri atau atur Secrets.")
     elif not topic:
-        st.error("Topik kosong!")
+        st.error("⚠️ Topik belum diisi!")
     else:
-        with st.spinner("Sedang berpikir..."):
+        with st.spinner("Sedang meracik prompt & metadata..."):
             data = run_generation(topic, mode_key, trend, qty)
+            
             if data:
+                # Tampilkan Preview Data Frame
                 df = pd.DataFrame(data)
+                st.success(f"Selesai! {len(data)} aset berhasil dibuat.")
                 st.dataframe(df)
-                st.download_button("📥 Download CSV", df.to_csv(index=False).encode('utf-8'), f"microstock_{topic}.csv", "text/csv")
+                
+                # Tombol Download
+                st.download_button(
+                    label="📥 Download CSV Lengkap",
+                    data=df.to_csv(index=False).encode('utf-8'),
+                    file_name=f"microstock_{topic.replace(' ', '_')}.csv",
+                    mime="text/csv"
+                )
+                
+                # Preview Prompt Text
+                st.markdown("### 📝 Quick Copy Prompts")
                 for d in data:
                     with st.expander(f"Prompt: {d['title']}"):
                         st.code(d['midjourney_prompt'])
+                        st.caption(f"Keywords: {d['keywords']}")
