@@ -16,16 +16,16 @@ VISUAL_MODES = {
     "5": {"name": "Infographic & Isometric", "keywords": "isometric view, 3d vector render, gradient glass texture, tech startup vibe, --no text letters", "ar": "--ar 16:9"}
 }
 
-# --- LOGIKA API KEY (SECRETS) ---
-# Cek apakah ada API Key tersimpan di Secrets Streamlit
+# --- LOGIKA API KEY (REVISI: BACA SATU BARIS KOMA) ---
 if "api_keys" in st.secrets:
-    API_KEYS = st.secrets["api_keys"]
-    st.sidebar.success(f"✅ Terhubung: {len(API_KEYS)} API Key dimuat dari Cloud.")
+    # Mengambil string tunggal: "key1,key2,key3"
+    raw_keys = st.secrets["api_keys"]
+    # Memecahnya berdasarkan koma (,) dan menghapus spasi jika ada
+    API_KEYS = [k.strip() for k in raw_keys.split(',') if k.strip()]
+    st.sidebar.success(f"✅ Terhubung: {len(API_KEYS)} API Key aktif.")
 else:
-    # Jika tidak ada di secrets, minta manual (opsional)
     st.sidebar.warning("⚠️ Belum ada API Key di Secrets.")
-    api_input = st.sidebar.text_area("Input Manual API Keys (Satu per baris)")
-    API_KEYS = [k.strip() for k in api_input.split('\n') if k.strip()]
+    API_KEYS = []
 
 # --- FUNGSI GENERATOR ---
 def get_model(api_key):
@@ -39,7 +39,7 @@ def create_system_prompt(topic, mode_data, trend=""):
     {{
         "midjourney_prompt": "Visual description + {mode_data['keywords']} + {mode_data['ar']} --v 6.0",
         "title": "SEO Title (English, Max 70 chars)",
-        "keywords": "50 keywords (English, comma separated)",
+        "keywords": "47 keywords (English, comma separated)",
         "social_caption": "Caption (Indonesian) + CTA",
         "hashtags": "#hashtags"
     }}
@@ -66,10 +66,11 @@ def run_generation(topic, mode_key, trend, qty):
                 success = True
                 time.sleep(1)
             except Exception:
+                # Jika error, pindah ke key berikutnya
                 key_index += 1 
         
         if not success:
-            st.error("❌ API Key habis/error!")
+            st.error("❌ Semua API Key habis atau error!")
             break
         progress_bar.progress((i + 1) / qty)
         
@@ -88,7 +89,7 @@ with col2:
 
 if st.button("🚀 Generate", type="primary"):
     if not API_KEYS:
-        st.error("API Key belum disetting!")
+        st.error("API Key belum disetting di Secrets!")
     elif not topic:
         st.error("Topik kosong!")
     else:
