@@ -76,7 +76,7 @@ def run_generation(topic, mode_key, trend, qty):
                 data = json.loads(response.text)
                 results.append(data)
                 success = True
-                time.sleep(1) # Jeda aman
+                time.sleep(5) # Jeda aman
             except Exception as e:
                 # Jika error, pindah ke key berikutnya
                 print(f"Key index {key_index} error: {e}")
@@ -132,3 +132,4 @@ if st.button("🚀 Generate Aset", type="primary"):
                     with st.expander(f"Prompt: {d['title']}"):
                         st.code(d['midjourney_prompt'])
                         st.caption(f"Keywords: {d['keywords']}")
+
