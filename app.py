@@ -3,10 +3,10 @@ import time
 import random
 
 # ==========================================
-# 1. SETUP & LIBRARY CHECK
+# 1. SETUP & LIBRARY
 # ==========================================
 st.set_page_config(
-    page_title="Microstock Multi-Engine",
+    page_title="Microstock Gen (Validated)",
     page_icon="⚡",
     layout="wide"
 )
@@ -16,7 +16,8 @@ st.markdown("""
 <style>
     .stCodeBlock {margin-bottom: 0px;}
     div[data-testid="stExpander"] {border: 1px solid #e0e0e0; border-radius: 8px;}
-    .stRadio [role=radiogroup] {gap: 20px;}
+    .success-box {padding: 10px; background-color: #d4edda; color: #155724; border-radius: 5px; margin-bottom: 10px;}
+    .error-box {padding: 10px; background-color: #f8d7da; color: #721c24; border-radius: 5px; margin-bottom: 10px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -28,7 +29,7 @@ except ImportError:
     st.stop()
 
 # ==========================================
-# 2. CORE FUNCTIONS
+# 2. FUNGSI VALIDASI (THE GATEKEEPER)
 # ==========================================
 
 def clean_keys(raw_text):
@@ -41,19 +42,94 @@ def clean_keys(raw_text):
             cleaned.append(k)
     return list(set(cleaned))
 
-@st.cache_resource
-def get_best_model(_api_key):
+def check_key_health(api_key):
+    """Melakukan tes ping ringan untuk memastikan key hidup"""
     try:
-        genai.configure(api_key=_api_key, transport='rest')
+        genai.configure(api_key=api_key, transport='rest')
+        
+        # 1. Cek Model Available
         models = list(genai.list_models())
-        available = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
-        for m in available: 
-            if 'flash' in m and '1.5' in m: return m
-        for m in available: 
-            if 'pro' in m: return m
-        return available[0] if available else "models/gemini-1.5-flash"
-    except:
-        return "models/gemini-1.5-flash"
+        model_name = None
+        
+        # Prioritas Flash -> Pro
+        model_candidates = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
+        
+        for m in model_candidates:
+            if 'flash' in m and '1.5' in m: 
+                model_name = m; break
+        if not model_name and model_candidates: 
+            model_name = model_candidates[0]
+            
+        if not model_name:
+            return False, "No Model Found", None
+
+        # 2. Cek Eksekusi (Ping) - Token sangat sedikit biar cepat
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content("Hi", generation_config={'max_output_tokens': 1})
+        
+        return True, "Active", model_name
+
+    except Exception as e:
+        err = str(e)
+        if "429" in err: return False, "Quota Exceeded (Limit)", None
+        if "400" in err: return False, "Invalid Key", None
+        return False, "Error Connection", None
+
+# ==========================================
+# 3. SIDEBAR: VALIDASI DULUAN
+# ==========================================
+st.sidebar.header("🔑 API Key Manager")
+
+if 'verified_keys' not in st.session_state:
+    st.session_state.verified_keys = []
+
+raw_input = st.sidebar.text_area("Paste API Keys:", height=100, placeholder="AIzaSy...")
+
+# Tombol Cek
+if st.sidebar.button("🔍 Validasi Kunci", type="primary"):
+    candidates = clean_keys(raw_input)
+    
+    if not candidates:
+        st.sidebar.error("❌ Tidak ada key terdeteksi.")
+    else:
+        valid_pool = []
+        progress_bar = st.sidebar.progress(0)
+        status_text = st.sidebar.empty()
+        
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("**Laporan Status:**")
+        
+        for i, key in enumerate(candidates):
+            status_text.text(f"Mengecek Key {i+1}...")
+            is_alive, msg, model_used = check_key_health(key)
+            
+            masked = f"...{key[-4:]}"
+            if is_alive:
+                st.sidebar.markdown(f"✅ Key {i+1} ({masked}): **OK**")
+                valid_pool.append(key)
+            else:
+                st.sidebar.markdown(f"❌ Key {i+1} ({masked}): **{msg}**")
+            
+            progress_bar.progress((i + 1) / len(candidates))
+            
+        st.session_state.verified_keys = valid_pool
+        status_text.empty()
+        
+        if valid_pool:
+            st.sidebar.success(f"🎉 {len(valid_pool)} Key Siap Tempur!")
+        else:
+            st.sidebar.error("💀 Semua Key Mati/Limit.")
+
+# Tampilkan Status Terkini (Persisten)
+if st.session_state.verified_keys:
+    st.sidebar.info(f"🟢 {len(st.session_state.verified_keys)} Key Aktif di Memori")
+else:
+    st.sidebar.warning("🔴 Belum ada Key Valid.")
+
+
+# ==========================================
+# 4. LOGIKA UTAMA (SAMA SEPERTI SEBELUMNYA)
+# ==========================================
 
 SAFETY = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -62,44 +138,10 @@ SAFETY = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-# ==========================================
-# 3. LOGIKA ANGLE & KATEGORI
-# ==========================================
-
-# Kategori 1: OBJECT SLICE (PNG)
-ANGLES_SLICE = [
-    "Front View (Symmetrical)",
-    "Isometric View (3D Icon style)",
-    "Top Down / Flat Lay",
-    "Three-Quarter View (Product shot)",
-    "Exploded View (Parts floating)",
-    "Close-up Macro (Texture focus)",
-    "Floating / Levitation",
-    "Knolling (Arranged grid)"
-]
-
-# Kategori 2: SOCIAL MEDIA (Vertical)
-ANGLES_SOCIAL = [
-    "POV Shot (First person view)",
-    "Vertical Hero Shot (Low angle)",
-    "Lifestyle Candid (Human element)",
-    "Phone Screen Context (Mockup)",
-    "Aesthetic Blur / Bokeh",
-    "Motion Blur (Dynamic)",
-    "Mirror Selfie / Reflection",
-    "Behind The Scenes (Messy aesthetic)"
-]
-
-# Kategori 3: PRINT MEDIA (Layout)
-ANGLES_PRINT = [
-    "Rule of Thirds (Left/Right)",
-    "Bottom Composition (Header Space)",
-    "Wide Panoramic",
-    "Minimalist Studio",
-    "Corner Composition",
-    "Selective Focus (Blurry foreground)",
-    "Top Down Center Space"
-]
+# --- ANGLES DATABASE ---
+ANGLES_SLICE = ["Front View", "Isometric View", "Top Down / Flat Lay", "Three-Quarter View", "Exploded View", "Close-up Macro", "Floating / Levitation", "Knolling"]
+ANGLES_SOCIAL = ["POV Shot", "Vertical Hero Shot", "Lifestyle Candid", "Phone Screen Context", "Aesthetic Blur", "Motion Blur", "Mirror Selfie", "Behind The Scenes"]
+ANGLES_PRINT = ["Rule of Thirds", "Bottom Composition", "Wide Panoramic", "Minimalist Studio", "Corner Composition", "Selective Focus", "Top Down Center Space"]
 
 def get_angles(category, qty):
     if category == "Object Slice (PNG Assets)": base = ANGLES_SLICE
@@ -109,86 +151,44 @@ def get_angles(category, qty):
     return random.sample(base, qty)
 
 # ==========================================
-# 4. SIDEBAR SETUP
+# 5. UI GENERATOR
 # ==========================================
-st.sidebar.header("⚡ Engine Setup")
+st.title("⚡ Microstock Gen (Verified Mode)")
 
-if 'app_keys' not in st.session_state:
-    st.session_state.app_keys = []
-
-raw_input = st.sidebar.text_area("API Keys:", height=100, placeholder="AIzaSy...")
-
-if raw_input:
-    keys = clean_keys(raw_input)
-    if keys:
-        st.session_state.app_keys = keys
-        st.sidebar.success(f"✅ {len(keys)} Key Ready")
-    else:
-        st.sidebar.error("❌ Key Invalid")
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🤖 Pilih Platform AI")
-ai_platform = st.sidebar.radio(
-    "Target Generator:",
-    ["Midjourney v6", "Flux.1", "Ideogram 2.0"],
-    captions=[
-        "Standard Gold. Artistik & Parameter.", 
-        "Spesialis Fotorealistik & Presisi.", 
-        "Juara Tipografi & Grafis."
-    ]
-)
-
-# ==========================================
-# 5. UI UTAMA
-# ==========================================
-st.title(f"⚡ Microstock Gen: {ai_platform} Mode")
-st.caption("Fokus: Realisme, Tekstur Alami, dan Kepatuhan Adobe Stock.")
+# Platform Selector
+ai_platform = st.radio("🤖 Target AI Platform:", ["Midjourney v6", "Flux.1", "Ideogram 2.0"], horizontal=True)
 
 col1, col2 = st.columns(2)
-
 with col1:
-    topic = st.text_input("💡 Topik / Objek", placeholder="Contoh: Fresh Croissant / Business Woman")
-    category = st.radio("🎯 Target Output:", ["Object Slice (PNG Assets)", "Social Media (IG/TikTok)", "Print Media (Flyer)"])
+    topic = st.text_input("💡 Topik / Objek", placeholder="Contoh: Fresh Croissant")
+    category = st.radio("🎯 Kategori:", ["Object Slice (PNG Assets)", "Social Media (IG/TikTok)", "Print Media (Flyer)"])
 
 with col2:
-    # Logic Aspect Ratio berdasarkan Platform
     if ai_platform == "Midjourney v6":
-        # MJ pakai parameter --ar
-        if category == "Object Slice (PNG Assets)":
-            ar_display = "--ar 1:1"
-        elif category == "Social Media (IG/TikTok)":
-            ar_display = st.selectbox("📐 Rasio", ["--ar 9:16", "--ar 4:5"])
-        else:
-            ar_display = st.selectbox("📐 Rasio", ["--ar 2:3", "--ar 3:2", "--ar 4:3"])
-        ar_prompt_instruction = f"Add parameter {ar_display} at the end."
-        
+        if category == "Object Slice (PNG Assets)": ar_display = "--ar 1:1"
+        elif category == "Social Media (IG/TikTok)": ar_display = st.selectbox("📐 Rasio", ["--ar 9:16", "--ar 4:5"])
+        else: ar_display = st.selectbox("📐 Rasio", ["--ar 2:3", "--ar 3:2"])
+        ar_instr = f"Add {ar_display} at end."
     else:
-        # Flux dan Ideogram biasanya handle AR di UI, bukan di prompt.
-        # Tapi kita masukkan deskripsi komposisi di prompt untuk memperkuat.
-        if category == "Object Slice (PNG Assets)":
-            ar_display = "Square (1:1)"
-            ar_prompt_instruction = "Describe a square composition."
-        elif category == "Social Media (IG/TikTok)":
-            ar_display = "Vertical (9:16)"
-            ar_prompt_instruction = "Explicitly describe a vertical, tall composition."
-        else:
-            ar_display = "Standard Print Ratio"
-            ar_prompt_instruction = "Describe a balanced print layout composition."
-            
-        st.info(f"ℹ️ Untuk {ai_platform}, atur rasio **{ar_display}** pada setting aplikasi generate Anda.")
+        st.info(f"ℹ️ {ai_platform}: Atur rasio manual di aplikasi AI.")
+        ar_instr = "Describe composition explicitly."
+        
+    qty = st.slider("🔢 Jumlah Variasi", 1, 10, 5)
 
-    qty = st.slider("🔢 Jumlah Variasi (Max 10)", 1, 10, 5)
+st.markdown("---")
 
 # ==========================================
-# 6. GENERATOR ENGINE
+# 6. EKSEKUSI (HANYA JIKA KEY VALID)
 # ==========================================
-if st.button(f"🚀 Generate Prompts untuk {ai_platform}", type="primary"):
-    keys = st.session_state.app_keys
+if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary", use_container_width=True):
     
-    if not keys:
-        st.error("⚠️ Masukkan Key di Sidebar!")
+    # CEK KUNCI DULUAN
+    valid_keys = st.session_state.verified_keys
+    
+    if not valid_keys:
+        st.error("⛔ STOP! Silakan validasi API Key dulu di Sidebar sebelah kiri.")
     elif not topic:
-        st.warning("⚠️ Masukkan Topik!")
+        st.warning("⚠️ Masukkan Topik dulu.")
     else:
         results = []
         pbar = st.progress(0)
@@ -196,108 +196,91 @@ if st.button(f"🚀 Generate Prompts untuk {ai_platform}", type="primary"):
         
         angles = get_angles(category, qty)
         key_idx = 0
-        model_name = get_best_model(keys[0])
+        
+        # Kita pakai Auto-Detect Model lagi di sini untuk instance
+        # Tapi karena key sudah divalidasi, kemungkinan error kecil.
         
         for i in range(qty):
             angle = angles[i]
-            status.text(f"⏳ Meracik Konsep {i+1}...")
+            status.text(f"⏳ Meracik Konsep {i+1}: {angle}...")
             
+            # Kita anggap semua key di valid_pool itu bagus, tapi tetap pake try-except
+            # jaga-jaga kalau limit habis pas tengah jalan
             success = False
             attempts = 0
             
-            while not success and attempts < len(keys):
-                current_key = keys[key_idx]
+            while not success and attempts < len(valid_keys):
+                current_key = valid_keys[key_idx]
                 
                 try:
                     genai.configure(api_key=current_key, transport='rest')
-                    model = genai.GenerativeModel(model_name)
+                    model = genai.GenerativeModel("gemini-1.5-flash") # Default aman
                     
-                    # === LOGIKA PROMPTING BERDASARKAN PLATFORM ===
-                    
+                    # PROMPT LOGIC
                     if ai_platform == "Midjourney v6":
-                        # Gaya MJ: Comma separated tags, teknis, parameter di ujung
                         sys_prompt = f"""
                         Role: Midjourney Expert v6.
                         Task: Create 1 prompt for {category}. Subject: {topic}. Angle: {angle}.
-                        
-                        RULES:
-                        1. Style: Raw photography, stock photo style.
-                        2. Format: Subject description, environment, lighting, technical specs, parameters.
-                        3. CRITICAL: Use keywords 'shot on Canon R5', 'natural texture', 'film grain'.
-                        4. {ar_prompt_instruction}
-                        5. APPEND: --style raw --stylize 50
+                        RULES: Raw photography style, commercial stock quality.
+                        Include parameters: --style raw --stylize 50 {ar_instr}
                         OUTPUT: Raw prompt text only.
                         """
-                        
                     elif ai_platform == "Flux.1":
-                        # Gaya Flux: Natural Language, Deskriptif, Detail Tekstur
                         sys_prompt = f"""
-                        Role: Professional Photographer (Flux.1 Expert).
-                        Task: Write a detailed caption for a photo. Category: {category}. Subject: {topic}. Angle: {angle}.
-                        
-                        RULES:
-                        1. Style: Hyper-realistic, unpolished, amateur photography feel.
-                        2. Format: Use natural sentences (NOT comma separated tags). Describe the light hitting the surface, the skin pores, the dust, the imperfections.
-                        3. CRITICAL: {ar_prompt_instruction} Do NOT use '--ar' or parameters. Just describe the visual.
-                        4. Focus on material authenticity.
-                        OUTPUT: Raw description text only.
+                        Role: Flux.1 Expert Photographer.
+                        Task: Detailed image description for {category}. Subject: {topic}. Angle: {angle}.
+                        RULES: Hyper-realistic, focus on texture, lighting, skin pores, material details. Natural language.
+                        OUTPUT: Raw description only.
                         """
-                        
                     elif ai_platform == "Ideogram 2.0":
-                        # Gaya Ideogram: Komposisi Kuat, Grafis, Jelas
                         sys_prompt = f"""
-                        Role: Art Director (Ideogram Expert).
-                        Task: Create 1 image description. Category: {category}. Subject: {topic}. Angle: {angle}.
-                        
-                        RULES:
-                        1. Style: Clean, strong composition, stock photography.
-                        2. Focus on Visual Hierarchy and Layout.
-                        3. If 'Print Media', describe exactly where the empty space is.
-                        4. If 'Object Slice', describe the white background isolation clearly.
-                        5. {ar_prompt_instruction} No parameters.
-                        OUTPUT: Raw description text only.
+                        Role: Ideogram Design Expert.
+                        Task: Image description for {category}. Subject: {topic}. Angle: {angle}.
+                        RULES: Focus on Composition, Visual Hierarchy, Typography space.
+                        OUTPUT: Raw description only.
                         """
-
+                    
                     response = model.generate_content(sys_prompt, safety_settings=SAFETY)
                     
                     if response.text:
                         clean_p = response.text.strip().replace('"', '').replace("`", "").replace("Prompt:", "")
-                        
-                        # Post-Processing khusus MJ (Double check parameter)
                         if ai_platform == "Midjourney v6" and "--style raw" not in clean_p:
                             clean_p += " --style raw"
                             
-                        results.append((angle.split('(')[0], clean_p))
+                        results.append((angle, clean_p))
                         success = True
-                        
+                
                 except Exception:
+                    # Kalau key ini gagal (tiba-tiba limit), kita tandai (opsional)
+                    # dan pindah ke key berikutnya
                     pass
                 
-                key_idx = (key_idx + 1) % len(keys)
+                key_idx = (key_idx + 1) % len(valid_keys)
+                
                 if success:
                     time.sleep(0.5)
                     break
                 else:
                     attempts += 1
-                    time.sleep(1)
+                    time.sleep(0.5)
             
             pbar.progress((i+1)/qty)
         
         status.empty()
         
         if results:
-            st.success(f"✅ Selesai! {len(results)} Prompt untuk {ai_platform}.")
+            st.success(f"✅ Selesai! {len(results)} Prompt Terbuat.")
             
             # Download
             txt_out = f"PLATFORM: {ai_platform}\nTOPIK: {topic}\n\n"
             for idx, r in enumerate(results):
                 txt_out += f"[{r[0]}]\n{r[1]}\n\n"
             
-            st.download_button("📥 Download .txt", txt_out, f"prompts_{ai_platform}_{topic}.txt")
+            st.download_button("📥 Download .txt", txt_out, f"prompts_{topic}.txt")
             
-            st.markdown("---")
+            # Display
             for idx, (ang, txt) in enumerate(results):
                 st.markdown(f"**#{idx+1} {ang}**")
                 st.code(txt, language="text")
         else:
-            st.error("❌ Gagal. Cek Key.")
+            st.error("❌ Gagal Generate. Kemungkinan Key Limit di tengah jalan.")
