@@ -155,4 +155,109 @@ with col1:
 with col2:
     if ai_platform == "Midjourney v6":
         if category == "Object Slice (PNG Assets)": ar_display = "--ar 1:1"
-        elif category == "Social Media (IG
+        elif category == "Social Media (IG/TikTok)": ar_display = st.selectbox("📐 Rasio", ["--ar 9:16", "--ar 4:5"])
+        else: ar_display = st.selectbox("📐 Rasio", ["--ar 2:3", "--ar 3:2"])
+        ar_instr = f"Add {ar_display} at end."
+    else:
+        st.info(f"ℹ️ {ai_platform}: Atur rasio manual di webnya.")
+        ar_instr = "Describe composition explicitly."
+        
+    qty = st.slider("🔢 Jumlah Variasi", 1, 10, 5)
+
+st.markdown("---")
+
+# ==========================================
+# 6. EKSEKUSI
+# ==========================================
+if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary"):
+    
+    keys_data = st.session_state.active_keys_data
+    
+    if not keys_data:
+        st.error("⛔ Validasi Key dulu di Sidebar!")
+    elif not topic:
+        st.warning("⚠️ Masukkan Topik.")
+    else:
+        results = []
+        error_log = st.expander("📜 Log Error (Buka jika gagal)", expanded=False)
+        pbar = st.progress(0)
+        
+        angles = get_angles(category, qty)
+        key_idx = 0
+        
+        for i in range(qty):
+            angle = angles[i]
+            success = False
+            attempts = 0
+            
+            while not success and attempts < len(keys_data):
+                current_data = keys_data[key_idx]
+                
+                try:
+                    genai.configure(api_key=current_data['key'], transport='rest')
+                    model = genai.GenerativeModel(current_data['model'])
+                    
+                    if ai_platform == "Midjourney v6":
+                        sys_prompt = f"""
+                        Role: Midjourney Expert v6.
+                        Task: Create 1 prompt for {category}. Subject: {topic}. Angle: {angle}.
+                        RULES: Raw photography style, commercial stock quality.
+                        Include parameters: --style raw --stylize 50 {ar_instr}
+                        OUTPUT: Raw prompt text only.
+                        """
+                    elif ai_platform == "Flux.1":
+                        sys_prompt = f"""
+                        Role: Flux.1 Expert.
+                        Task: Detailed image description for {category}. Subject: {topic}. Angle: {angle}.
+                        RULES: Hyper-realistic, texture focus, natural language.
+                        OUTPUT: Raw description only.
+                        """
+                    elif ai_platform == "Ideogram 2.0":
+                        sys_prompt = f"""
+                        Role: Ideogram Expert.
+                        Task: Image description for {category}. Subject: {topic}. Angle: {angle}.
+                        RULES: Focus on Composition, Visual Hierarchy.
+                        OUTPUT: Raw description only.
+                        """
+                    
+                    response = model.generate_content(sys_prompt, safety_settings=SAFETY)
+                    
+                    if response.text:
+                        clean_p = response.text.strip().replace('"', '').replace("`", "").replace("Prompt:", "")
+                        if ai_platform == "Midjourney v6" and "--style raw" not in clean_p:
+                            clean_p += " --style raw"
+                            
+                        results.append((angle, clean_p))
+                        success = True
+                
+                except Exception as e:
+                    error_log.warning(f"Key #{key_idx+1}: {str(e)}")
+                    pass
+                
+                key_idx = (key_idx + 1) % len(keys_data)
+                if success: break
+                else: attempts += 1
+            
+            pbar.progress((i+1)/qty)
+        
+        if results:
+            st.success(f"✅ Selesai! {len(results)} Prompt.")
+            
+            # --- BAGIAN TOMBOL DOWNLOAD YANG HILANG (SUDAH DIKEMBALIKAN) ---
+            txt_out = f"PLATFORM: {ai_platform}\nTOPIK: {topic}\n\n"
+            for idx, r in enumerate(results):
+                txt_out += f"[{r[0]}]\n{r[1]}\n\n"
+            
+            st.download_button(
+                label="📥 Download .txt",
+                data=txt_out,
+                file_name=f"prompts_{topic}.txt",
+                mime="text/plain"
+            )
+            # -------------------------------------------------------------
+            
+            for idx, (ang, txt) in enumerate(results):
+                st.markdown(f"**#{idx+1} {ang}**")
+                st.code(txt, language="text")
+        else:
+            st.error("❌ Gagal Total. Cek 'Log Error' di atas.")
