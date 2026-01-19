@@ -6,16 +6,16 @@ import random
 # 1. SETUP & LIBRARY
 # ==========================================
 st.set_page_config(
-    page_title="Microstock Gen (Complete)",
-    page_icon="⚡",
+    page_title="Microstock Gen (Limit Safe)",
+    page_icon="📏",
     layout="wide"
 )
 
-# Custom CSS
 st.markdown("""
 <style>
     .stCodeBlock {margin-bottom: 0px;}
     div[data-testid="stExpander"] {border: 1px solid #e0e0e0; border-radius: 8px;}
+    .char-count {font-size: 12px; color: #666; margin-top: 5px; font-family: monospace;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -41,32 +41,24 @@ def clean_keys(raw_text):
     return list(set(cleaned))
 
 def check_key_health(api_key):
-    """Cek Key DAN simpan nama model yang berhasil"""
     try:
         genai.configure(api_key=api_key, transport='rest')
-        
-        # Cari Model
         models = list(genai.list_models())
         found_model = None
         candidates = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
         
-        # Prioritas Model
         for m in candidates:
             if 'flash' in m and '1.5' in m: found_model = m; break
         if not found_model:
             for m in candidates:
                 if 'pro' in m and '1.5' in m: found_model = m; break
-        if not found_model and candidates:
-            found_model = candidates[0]
+        if not found_model and candidates: found_model = candidates[0]
             
         if not found_model: return False, "No Model Found", None
 
-        # Test Ping
         model = genai.GenerativeModel(found_model)
         model.generate_content("Hi", generation_config={'max_output_tokens': 1})
-        
         return True, "Active", found_model
-
     except Exception as e:
         err = str(e)
         if "429" in err: return False, "Quota Limit", None
@@ -74,7 +66,7 @@ def check_key_health(api_key):
         return False, f"Error: {err[:15]}...", None
 
 # ==========================================
-# 3. SIDEBAR: VALIDASI
+# 3. SIDEBAR
 # ==========================================
 st.sidebar.header("🔑 API Key Manager")
 
@@ -85,7 +77,6 @@ raw_input = st.sidebar.text_area("Paste API Keys:", height=100, placeholder="AIz
 
 if st.sidebar.button("🔍 Validasi & Sync Model", type="primary"):
     candidates = clean_keys(raw_input)
-    
     if not candidates:
         st.sidebar.error("❌ Key kosong.")
     else:
@@ -93,18 +84,11 @@ if st.sidebar.button("🔍 Validasi & Sync Model", type="primary"):
         progress_bar = st.sidebar.progress(0)
         status_text = st.sidebar.empty()
         
-        st.sidebar.markdown("---")
-        
         for i, key in enumerate(candidates):
             status_text.text(f"Cek Key {i+1}...")
             is_alive, msg, model_name = check_key_health(key)
-            
             if is_alive:
-                st.sidebar.success(f"Key {i+1}: OK")
                 valid_data.append({'key': key, 'model': model_name})
-            else:
-                st.sidebar.error(f"Key {i+1}: {msg}")
-            
             progress_bar.progress((i + 1) / len(candidates))
             
         st.session_state.active_keys_data = valid_data
@@ -119,7 +103,7 @@ if st.session_state.active_keys_data:
     st.sidebar.info(f"🟢 {len(st.session_state.active_keys_data)} Key Aktif")
 
 # ==========================================
-# 4. LOGIKA UTAMA
+# 4. LOGIKA UTAMA & LIMITS
 # ==========================================
 
 SAFETY = {
@@ -143,7 +127,7 @@ def get_angles(category, qty):
 # ==========================================
 # 5. UI GENERATOR
 # ==========================================
-st.title("⚡ Microstock Gen (Verified)")
+st.title("📏 Microstock Gen (Char Limit Safe)")
 
 ai_platform = st.radio("🤖 Platform:", ["Midjourney v6", "Flux.1", "Ideogram 2.0"], horizontal=True)
 
@@ -158,18 +142,21 @@ with col2:
         elif category == "Social Media (IG/TikTok)": ar_display = st.selectbox("📐 Rasio", ["--ar 9:16", "--ar 4:5"])
         else: ar_display = st.selectbox("📐 Rasio", ["--ar 2:3", "--ar 3:2"])
         ar_instr = f"Add {ar_display} at end."
+        char_limit_msg = "Limit: ~1800 chars (Soft Limit)"
     else:
-        st.info(f"ℹ️ {ai_platform}: Atur rasio manual di webnya.")
+        st.info(f"ℹ️ {ai_platform}: Rasio diatur manual di web.")
         ar_instr = "Describe composition explicitly."
+        char_limit_msg = "Limit: 2000 chars (Hard Limit)"
         
     qty = st.slider("🔢 Jumlah Variasi", 1, 10, 5)
+    st.caption(f"🛡️ Safety: {char_limit_msg}")
 
 st.markdown("---")
 
 # ==========================================
 # 6. EKSEKUSI
 # ==========================================
-if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary"):
+if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
     
     keys_data = st.session_state.active_keys_data
     
@@ -179,7 +166,7 @@ if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary"):
         st.warning("⚠️ Masukkan Topik.")
     else:
         results = []
-        error_log = st.expander("📜 Log Error (Buka jika gagal)", expanded=False)
+        error_log = st.expander("📜 Log Error", expanded=False)
         pbar = st.progress(0)
         
         angles = get_angles(category, qty)
@@ -187,6 +174,7 @@ if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary"):
         
         for i in range(qty):
             angle = angles[i]
+            
             success = False
             attempts = 0
             
@@ -197,12 +185,16 @@ if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary"):
                     genai.configure(api_key=current_data['key'], transport='rest')
                     model = genai.GenerativeModel(current_data['model'])
                     
+                    # SYSTEM PROMPT YANG DIMODIFIKASI DENGAN LIMIT
+                    limit_instruction = "CRITICAL: Keep the output concise. Maximum length must be under 1800 characters. Do not write a novel. Be dense and descriptive."
+                    
                     if ai_platform == "Midjourney v6":
                         sys_prompt = f"""
                         Role: Midjourney Expert v6.
                         Task: Create 1 prompt for {category}. Subject: {topic}. Angle: {angle}.
                         RULES: Raw photography style, commercial stock quality.
                         Include parameters: --style raw --stylize 50 {ar_instr}
+                        {limit_instruction}
                         OUTPUT: Raw prompt text only.
                         """
                     elif ai_platform == "Flux.1":
@@ -210,6 +202,7 @@ if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary"):
                         Role: Flux.1 Expert.
                         Task: Detailed image description for {category}. Subject: {topic}. Angle: {angle}.
                         RULES: Hyper-realistic, texture focus, natural language.
+                        {limit_instruction}
                         OUTPUT: Raw description only.
                         """
                     elif ai_platform == "Ideogram 2.0":
@@ -217,6 +210,7 @@ if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary"):
                         Role: Ideogram Expert.
                         Task: Image description for {category}. Subject: {topic}. Angle: {angle}.
                         RULES: Focus on Composition, Visual Hierarchy.
+                        {limit_instruction}
                         OUTPUT: Raw description only.
                         """
                     
@@ -226,6 +220,10 @@ if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary"):
                         clean_p = response.text.strip().replace('"', '').replace("`", "").replace("Prompt:", "")
                         if ai_platform == "Midjourney v6" and "--style raw" not in clean_p:
                             clean_p += " --style raw"
+                        
+                        # FORCE TRUNCATE JIKA AI MEMBANDEL (Safety Net)
+                        if len(clean_p) > 2000:
+                            clean_p = clean_p[:1997] + "..."
                             
                         results.append((angle, clean_p))
                         success = True
@@ -237,27 +235,25 @@ if st.button(f"🚀 Generate Prompts ({ai_platform})", type="primary"):
                 key_idx = (key_idx + 1) % len(keys_data)
                 if success: break
                 else: attempts += 1
+                time.sleep(0.5)
             
             pbar.progress((i+1)/qty)
         
         if results:
-            st.success(f"✅ Selesai! {len(results)} Prompt.")
+            st.success(f"✅ Selesai! {len(results)} Prompt (Optimized Length).")
             
-            # --- BAGIAN TOMBOL DOWNLOAD YANG HILANG (SUDAH DIKEMBALIKAN) ---
             txt_out = f"PLATFORM: {ai_platform}\nTOPIK: {topic}\n\n"
             for idx, r in enumerate(results):
                 txt_out += f"[{r[0]}]\n{r[1]}\n\n"
             
-            st.download_button(
-                label="📥 Download .txt",
-                data=txt_out,
-                file_name=f"prompts_{topic}.txt",
-                mime="text/plain"
-            )
-            # -------------------------------------------------------------
+            st.download_button("📥 Download .txt", txt_out, f"prompts_{topic}.txt")
             
             for idx, (ang, txt) in enumerate(results):
+                char_len = len(txt)
+                color = "green" if char_len < 1800 else "orange" if char_len < 2000 else "red"
+                
                 st.markdown(f"**#{idx+1} {ang}**")
                 st.code(txt, language="text")
+                st.markdown(f"<div class='char-count' style='color:{color}'>Length: {char_len} chars</div>", unsafe_allow_html=True)
         else:
-            st.error("❌ Gagal Total. Cek 'Log Error' di atas.")
+            st.error("❌ Gagal Total. Cek Log Error.")
