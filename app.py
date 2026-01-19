@@ -3,15 +3,15 @@ import time
 import random
 
 # ==========================================
-# 1. SETUP & LIBRARY CHECK (THE STABLE BASE)
+# 1. SETUP & LIBRARY CHECK
 # ==========================================
 st.set_page_config(
-    page_title="Microstock Asset & Social",
-    page_icon="✂️",
+    page_title="Microstock Generator All-in-One",
+    page_icon="🎨",
     layout="wide"
 )
 
-# Custom CSS untuk tampilan lebih bersih
+# Custom CSS
 st.markdown("""
 <style>
     .stCodeBlock {margin-bottom: 0px;}
@@ -27,10 +27,9 @@ except ImportError:
     st.stop()
 
 # ==========================================
-# 2. CORE FUNCTIONS (JANGAN DIUBAH - SUDAH FIX)
+# 2. CORE FUNCTIONS (FIXED)
 # ==========================================
 
-# A. Pembersih Key (Anti-Spasi/Kutip)
 def clean_keys(raw_text):
     if not raw_text: return []
     candidates = raw_text.replace('\n', ',').split(',')
@@ -41,15 +40,12 @@ def clean_keys(raw_text):
             cleaned.append(k)
     return list(set(cleaned))
 
-# B. Auto-Model Discovery (Anti-404)
 @st.cache_resource
 def get_best_model(_api_key):
     try:
-        genai.configure(api_key=_api_key, transport='rest') # Wajib REST
+        genai.configure(api_key=_api_key, transport='rest')
         models = list(genai.list_models())
         available = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
-        
-        # Prioritas: Flash -> Pro
         for m in available: 
             if 'flash' in m and '1.5' in m: return m
         for m in available: 
@@ -58,7 +54,6 @@ def get_best_model(_api_key):
     except:
         return "models/gemini-1.5-flash"
 
-# C. Safety Settings (Anti-Block)
 SAFETY = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -67,11 +62,10 @@ SAFETY = {
 }
 
 # ==========================================
-# 3. LOGIKA SPESIFIK (ASSET VS SOCIAL)
+# 3. LOGIKA ANGLE (THE BRAIN)
 # ==========================================
 
-# Kategori 1: OBJECT SLICE (Untuk Aset PNG)
-# Angle difokuskan pada "View" teknis agar mudah di-crop
+# Kategori 1: OBJECT SLICE (PNG)
 ANGLES_SLICE = [
     "Front View (Symmetrical, clean)",
     "Isometric View (3D Icon style)",
@@ -83,183 +77,46 @@ ANGLES_SLICE = [
     "Knolling (Arranged grid)"
 ]
 
-# Kategori 2: SOCIAL MEDIA (IG/TikTok)
-# Angle difokuskan pada "Experience" dan "Vertical Composition"
+# Kategori 2: SOCIAL MEDIA (Vertical)
 ANGLES_SOCIAL = [
-    "POV Shot (First person view, hands visible)",
-    "Behind The Scenes (Messy but aesthetic)",
+    "POV Shot (First person view)",
     "Vertical Hero Shot (Low angle looking up)",
     "Lifestyle Candid (Human element)",
-    "Phone Screen Mockup (Contextual)",
-    "Aesthetic Blur / Bokeh (Background focus)",
-    "Motion Blur (Action/Dynamic)",
-    "Mirror Selfie / Reflection style"
+    "Phone Screen Context (Mockup style)",
+    "Aesthetic Blur / Bokeh Background",
+    "Motion Blur (Dynamic action)",
+    "Mirror Selfie / Reflection",
+    "Behind The Scenes (Messy aesthetic)"
+]
+
+# Kategori 3: PRINT MEDIA (Blank Space) - BARU!
+# Fokus pada Rule of Thirds dan Negative Space
+ANGLES_PRINT = [
+    "Rule of Thirds (Subject Left, Space Right)",
+    "Rule of Thirds (Subject Right, Space Left)",
+    "Bottom Composition (Space on Top for Title)",
+    "Wide Panoramic (Banner style)",
+    "Minimalist Studio (Vast background)",
+    "Corner Composition (Subject in corner)",
+    "Selective Focus (Blurred foreground for text)",
+    "Top Down with Center Copy Space"
 ]
 
 def get_angles(category, qty):
-    base_list = ANGLES_SLICE if category == "Object Slice (PNG Assets)" else ANGLES_SOCIAL
-    if qty > len(base_list):
-        return random.sample(base_list * 2, qty)
-    return random.sample(base_list, qty)
-
-# ==========================================
-# 4. SIDEBAR SETUP
-# ==========================================
-st.sidebar.header("✂️ Asset Factory")
-
-if 'asset_keys' not in st.session_state:
-    st.session_state.asset_keys = []
-
-raw_input = st.sidebar.text_area("API Keys:", height=150, placeholder="AIzaSy...")
-
-if raw_input:
-    keys = clean_keys(raw_input)
-    if keys:
-        st.session_state.asset_keys = keys
-        st.sidebar.success(f"✅ {len(keys)} Key Ready")
-        mod = get_best_model(keys[0])
-        st.sidebar.caption(f"Engine: {mod}")
-    else:
-        st.sidebar.error("❌ Key Invalid")
-
-# ==========================================
-# 5. UI UTAMA
-# ==========================================
-st.title("✂️ Microstock Asset & Social Gen")
-st.caption("Spesialisasi: Isolated Objects (untuk Freepik/Adobe) & Vertical Content (untuk Reels/TikTok).")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    # INPUT UTAMA
-    topic = st.text_input("💡 Topik / Objek", placeholder="Contoh: Fresh Burger / Gaming Setup")
-    
-    # PILIHAN FOKUS (Target Market)
-    category = st.radio(
-        "🎯 Target Output:",
-        ["Object Slice (PNG Assets)", "Social Media (IG/TikTok)"],
-        horizontal=True
-    )
-
-with col2:
-    # SETTING OTOMATIS BERDASARKAN KATEGORI
     if category == "Object Slice (PNG Assets)":
-        ar_mode = "--ar 1:1 (Square)"
-        st.info("ℹ️ **Mode Aset:** Prompt akan dimaksimalkan untuk background putih bersih, tanpa bayangan keras, siap potong (Cutout).")
+        base = ANGLES_SLICE
+    elif category == "Social Media (IG/TikTok)":
+        base = ANGLES_SOCIAL
     else:
-        ar_mode = st.selectbox("📐 Aspect Ratio", ["--ar 9:16 (Reels/TikTok)", "--ar 4:5 (IG Feed)"])
-        st.info("ℹ️ **Mode Sosial:** Prompt akan dimaksimalkan untuk komposisi vertikal, *aesthetic*, dan *engaging*.")
-
-    qty = st.slider("🔢 Jumlah Variasi (Max 10)", 1, 10, 5)
+        base = ANGLES_PRINT
+        
+    if qty > len(base):
+        return random.sample(base * 2, qty)
+    return random.sample(base, qty)
 
 # ==========================================
-# 6. GENERATOR ENGINE
+# 4. SIDEBAR
 # ==========================================
-if st.button("🚀 Generate Optimized Prompts", type="primary"):
-    keys = st.session_state.asset_keys
-    
-    if not keys:
-        st.error("⚠️ Masukkan Key di Sidebar!")
-    elif not topic:
-        st.warning("⚠️ Masukkan Topik!")
-    else:
-        results = []
-        pbar = st.progress(0)
-        status = st.empty()
-        
-        # Ambil Angle sesuai kategori
-        angles = get_angles(category, qty)
-        
-        key_idx = 0
-        model_name = get_best_model(keys[0])
-        
-        for i in range(qty):
-            angle = angles[i]
-            status.text(f"⏳ Meracik Konsep {i+1}: {angle.split('(')[0]}...")
-            
-            success = False
-            attempts = 0
-            
-            while not success and attempts < len(keys):
-                current_key = keys[key_idx]
-                
-                try:
-                    genai.configure(api_key=current_key, transport='rest')
-                    model = genai.GenerativeModel(model_name)
-                    
-                    # SYSTEM PROMPT (Sangat Spesifik)
-                    if category == "Object Slice (PNG Assets)":
-                        sys_prompt = f"""
-                        Role: Technical Stock Photographer (Asset Creator).
-                        Task: Create 1 Midjourney prompt for a High-Quality Asset.
-                        
-                        INPUTS:
-                        - Subject: {topic}
-                        - View/Angle: {angle}
-                        - AR: {ar_mode}
-                        
-                        MANDATORY RULES FOR ASSETS:
-                        1. BACKGROUND: Pure white background (hex #ffffff), studio lighting.
-                        2. ISOLATION: Isolated, no heavy shadows, sharp edges, clipping path friendly.
-                        3. QUALITY: 8k, hyper-detailed texture, commercial product photography.
-                        4. DIVERSITY: Focus strictly on the Angle '{angle}'.
-                        5. OUTPUT: Raw prompt text only. No intro.
-                        """
-                    else: # Social Media
-                        sys_prompt = f"""
-                        Role: Social Media Content Creator.
-                        Task: Create 1 Viral Midjourney prompt for Reels/TikTok.
-                        
-                        INPUTS:
-                        - Subject: {topic}
-                        - Vibe/Angle: {angle}
-                        - AR: {ar_mode}
-                        
-                        MANDATORY RULES FOR SOCIAL:
-                        1. COMPOSITION: Vertical framing, mobile-first design, room for text overlays (copy space).
-                        2. VIBE: Aesthetic, trending, cinematic lighting, engaging, high retention.
-                        3. QUALITY: 8k, sharp focus, instagrammable.
-                        4. DIVERSITY: Focus strictly on the Vibe '{angle}'.
-                        5. OUTPUT: Raw prompt text only. No intro.
-                        """
-                    
-                    response = model.generate_content(sys_prompt, safety_settings=SAFETY)
-                    
-                    if response.text:
-                        clean_p = response.text.strip().replace('"', '').replace("`", "").replace("Prompt:", "")
-                        results.append((angle.split('(')[0], clean_p))
-                        success = True
-                        
-                except Exception:
-                    pass # Silent failover
-                
-                key_idx = (key_idx + 1) % len(keys)
-                
-                if success:
-                    time.sleep(0.5)
-                    break
-                else:
-                    attempts += 1
-                    time.sleep(1)
-            
-            pbar.progress((i+1)/qty)
-        
-        status.empty()
-        
-        if results:
-            st.success(f"✅ Selesai! {len(results)} Prompt Spesifik Dibuat.")
-            
-            # Download TXT
-            txt_out = ""
-            for idx, r in enumerate(results):
-                txt_out += f"[{r[0]}] {r[1]}\n\n"
-            
-            st.download_button("📥 Download .txt", txt_out, f"prompts_{topic}.txt")
-            
-            st.markdown("---")
-            
-            for idx, (ang, txt) in enumerate(results):
-                st.markdown(f"**#{idx+1} {ang}**")
-                st.code(txt, language="text")
-        else:
-            st.error("❌ Gagal. Cek Key.")
+st.sidebar.header("🎨 Generator Setup")
+
+if 'app_keys' not in st.session_state:
