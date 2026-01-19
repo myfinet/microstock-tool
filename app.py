@@ -6,11 +6,12 @@ import random
 # 1. SETUP & LIBRARY
 # ==========================================
 st.set_page_config(
-    page_title="Microstock Gen (Limit Safe)",
-    page_icon="📏",
+    page_title="Microstock Gen v4.5",
+    page_icon="⚡",
     layout="wide"
 )
 
+# Custom CSS
 st.markdown("""
 <style>
     .stCodeBlock {margin-bottom: 0px;}
@@ -27,7 +28,7 @@ except ImportError:
     st.stop()
 
 # ==========================================
-# 2. FUNGSI VALIDASI
+# 2. FUNGSI VALIDASI & UTILITIES
 # ==========================================
 
 def clean_keys(raw_text):
@@ -47,6 +48,7 @@ def check_key_health(api_key):
         found_model = None
         candidates = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
         
+        # Prioritas Model (Flash -> Pro -> Default)
         for m in candidates:
             if 'flash' in m and '1.5' in m: found_model = m; break
         if not found_model:
@@ -56,6 +58,7 @@ def check_key_health(api_key):
             
         if not found_model: return False, "No Model Found", None
 
+        # Test Ping
         model = genai.GenerativeModel(found_model)
         model.generate_content("Hi", generation_config={'max_output_tokens': 1})
         return True, "Active", found_model
@@ -66,16 +69,16 @@ def check_key_health(api_key):
         return False, f"Error: {err[:15]}...", None
 
 # ==========================================
-# 3. SIDEBAR
+# 3. SIDEBAR: INPUT & VALIDASI
 # ==========================================
-st.sidebar.header("🔑 API Key Manager")
+st.sidebar.title("🔑 Key Manager")
 
 if 'active_keys_data' not in st.session_state:
     st.session_state.active_keys_data = []
 
 raw_input = st.sidebar.text_area("Paste API Keys:", height=100, placeholder="AIzaSy...")
 
-if st.sidebar.button("🔍 Validasi & Sync Model", type="primary"):
+if st.sidebar.button("🔍 Validasi & Sync", type="primary"):
     candidates = clean_keys(raw_input)
     if not candidates:
         st.sidebar.error("❌ Key kosong.")
@@ -103,7 +106,7 @@ if st.session_state.active_keys_data:
     st.sidebar.info(f"🟢 {len(st.session_state.active_keys_data)} Key Aktif")
 
 # ==========================================
-# 4. LOGIKA UTAMA & LIMITS
+# 4. LOGIKA UTAMA (SAFETY & ANGLES)
 # ==========================================
 
 SAFETY = {
@@ -125,9 +128,10 @@ def get_angles(category, qty):
     return random.sample(base, qty)
 
 # ==========================================
-# 5. UI GENERATOR
+# 5. UI GENERATOR (MAIN AREA)
 # ==========================================
-st.title("📏 Microstock Gen (Char Limit Safe)")
+st.title("⚡ Microstock Gen v4.5")
+st.caption("Adobe Stock & Freepik Compliant • Multi-Platform Engine")
 
 ai_platform = st.radio("🤖 Platform:", ["Midjourney v6", "Flux.1", "Ideogram 2.0"], horizontal=True)
 
@@ -142,19 +146,19 @@ with col2:
         elif category == "Social Media (IG/TikTok)": ar_display = st.selectbox("📐 Rasio", ["--ar 9:16", "--ar 4:5"])
         else: ar_display = st.selectbox("📐 Rasio", ["--ar 2:3", "--ar 3:2"])
         ar_instr = f"Add {ar_display} at end."
-        char_limit_msg = "Limit: ~1800 chars (Soft Limit)"
+        limit_msg = "Safe Limit: ~1800 chars"
     else:
-        st.info(f"ℹ️ {ai_platform}: Rasio diatur manual di web.")
+        st.info(f"ℹ️ {ai_platform}: Atur rasio manual di web.")
         ar_instr = "Describe composition explicitly."
-        char_limit_msg = "Limit: 2000 chars (Hard Limit)"
+        limit_msg = "Hard Limit: 2000 chars"
         
     qty = st.slider("🔢 Jumlah Variasi", 1, 10, 5)
-    st.caption(f"🛡️ Safety: {char_limit_msg}")
+    st.caption(f"🛡️ {limit_msg}")
 
 st.markdown("---")
 
 # ==========================================
-# 6. EKSEKUSI
+# 6. EKSEKUSI & SIDEBAR FOOTER
 # ==========================================
 if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
     
@@ -166,51 +170,53 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
         st.warning("⚠️ Masukkan Topik.")
     else:
         results = []
-        error_log = st.expander("📜 Log Error", expanded=False)
-        pbar = st.progress(0)
         
+        # --- LOG ERROR (Dynamic) ---
+        st.sidebar.markdown("---")
+        st.sidebar.caption("📉 Status Proses")
+        error_log = st.sidebar.expander("📜 Log Error (Real-time)", expanded=False)
+        # ---------------------------
+        
+        pbar = st.progress(0)
         angles = get_angles(category, qty)
         key_idx = 0
         
         for i in range(qty):
             angle = angles[i]
-            
             success = False
             attempts = 0
             
             while not success and attempts < len(keys_data):
                 current_data = keys_data[key_idx]
-                
                 try:
                     genai.configure(api_key=current_data['key'], transport='rest')
                     model = genai.GenerativeModel(current_data['model'])
                     
-                    # SYSTEM PROMPT YANG DIMODIFIKASI DENGAN LIMIT
-                    limit_instruction = "CRITICAL: Keep the output concise. Maximum length must be under 1800 characters. Do not write a novel. Be dense and descriptive."
+                    limit_instr = "CRITICAL: Output must be under 1800 chars. Concise & Dense."
                     
                     if ai_platform == "Midjourney v6":
                         sys_prompt = f"""
                         Role: Midjourney Expert v6.
                         Task: Create 1 prompt for {category}. Subject: {topic}. Angle: {angle}.
-                        RULES: Raw photography style, commercial stock quality.
+                        RULES: Commercial stock quality.
                         Include parameters: --style raw --stylize 50 {ar_instr}
-                        {limit_instruction}
+                        {limit_instr}
                         OUTPUT: Raw prompt text only.
                         """
                     elif ai_platform == "Flux.1":
                         sys_prompt = f"""
                         Role: Flux.1 Expert.
                         Task: Detailed image description for {category}. Subject: {topic}. Angle: {angle}.
-                        RULES: Hyper-realistic, texture focus, natural language.
-                        {limit_instruction}
+                        RULES: Hyper-realistic, texture focus.
+                        {limit_instr}
                         OUTPUT: Raw description only.
                         """
                     elif ai_platform == "Ideogram 2.0":
                         sys_prompt = f"""
                         Role: Ideogram Expert.
                         Task: Image description for {category}. Subject: {topic}. Angle: {angle}.
-                        RULES: Focus on Composition, Visual Hierarchy.
-                        {limit_instruction}
+                        RULES: Focus on Composition & Typography space.
+                        {limit_instr}
                         OUTPUT: Raw description only.
                         """
                     
@@ -220,11 +226,7 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
                         clean_p = response.text.strip().replace('"', '').replace("`", "").replace("Prompt:", "")
                         if ai_platform == "Midjourney v6" and "--style raw" not in clean_p:
                             clean_p += " --style raw"
-                        
-                        # FORCE TRUNCATE JIKA AI MEMBANDEL (Safety Net)
-                        if len(clean_p) > 2000:
-                            clean_p = clean_p[:1997] + "..."
-                            
+                        if len(clean_p) > 2000: clean_p = clean_p[:1997] + "..."
                         results.append((angle, clean_p))
                         success = True
                 
@@ -240,7 +242,7 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
             pbar.progress((i+1)/qty)
         
         if results:
-            st.success(f"✅ Selesai! {len(results)} Prompt (Optimized Length).")
+            st.success(f"✅ Selesai! {len(results)} Prompt.")
             
             txt_out = f"PLATFORM: {ai_platform}\nTOPIK: {topic}\n\n"
             for idx, r in enumerate(results):
@@ -251,9 +253,20 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
             for idx, (ang, txt) in enumerate(results):
                 char_len = len(txt)
                 color = "green" if char_len < 1800 else "orange" if char_len < 2000 else "red"
-                
                 st.markdown(f"**#{idx+1} {ang}**")
                 st.code(txt, language="text")
                 st.markdown(f"<div class='char-count' style='color:{color}'>Length: {char_len} chars</div>", unsafe_allow_html=True)
         else:
-            st.error("❌ Gagal Total. Cek Log Error.")
+            st.error("❌ Gagal Total. Cek Sidebar.")
+
+# --- UPDATE LOG (SELALU DI BAWAH) ---
+st.sidebar.markdown("---")
+with st.sidebar.expander("ℹ️ Keterangan Update v4.5"):
+    st.markdown("""
+    **Fitur Terbaru:**
+    - 🤖 **Multi-Platform:** Support Midjourney v6, Flux.1, Ideogram 2.0.
+    - 🛡️ **Adobe Compliant:** Logika *Concept Diversification* (Object Slice/Social/Print).
+    - 📏 **Limit Karakter:** Otomatis membatasi <2000 karakter agar tidak error.
+    - 🔄 **Auto-Sync Model:** Validasi key pintar (Anti-Error 404/400).
+    - 📜 **Log Error:** Tersembunyi rapi di Sidebar.
+    """)
