@@ -6,7 +6,7 @@ import random
 # 1. SETUP & LIBRARY
 # ==========================================
 st.set_page_config(
-    page_title="Microstock Gen v4.5",
+    page_title="Microstock Gen v4.6",
     page_icon="⚡",
     layout="wide"
 )
@@ -130,7 +130,7 @@ def get_angles(category, qty):
 # ==========================================
 # 5. UI GENERATOR (MAIN AREA)
 # ==========================================
-st.title("⚡ Microstock Gen v4.5")
+st.title("⚡ Microstock Gen v4.6")
 st.caption("Adobe Stock & Freepik Compliant • Multi-Platform Engine")
 
 ai_platform = st.radio("🤖 Platform:", ["Midjourney v6", "Flux.1", "Ideogram 2.0"], horizontal=True)
@@ -138,14 +138,25 @@ ai_platform = st.radio("🤖 Platform:", ["Midjourney v6", "Flux.1", "Ideogram 2
 col1, col2 = st.columns(2)
 with col1:
     topic = st.text_input("💡 Topik", placeholder="Contoh: Fresh Croissant")
-    category = st.radio("🎯 Kategori:", ["Object Slice (PNG Assets)", "Social Media (IG/TikTok)", "Print Media (Flyer)"])
+    category = st.radio("🎯 Kategori:", ["Object Slice (PNG Assets)", "Social Media (IG/TikTok)", "Print Media (Flyer/Banner)"])
 
 with col2:
     if ai_platform == "Midjourney v6":
-        if category == "Object Slice (PNG Assets)": ar_display = "--ar 1:1"
-        elif category == "Social Media (IG/TikTok)": ar_display = st.selectbox("📐 Rasio", ["--ar 9:16", "--ar 4:5"])
-        else: ar_display = st.selectbox("📐 Rasio", ["--ar 2:3", "--ar 3:2"])
-        ar_instr = f"Add {ar_display} at end."
+        if category == "Object Slice (PNG Assets)": 
+            ar_display = "--ar 1:1"
+        elif category == "Social Media (IG/TikTok)": 
+            ar_display = st.selectbox("📐 Rasio", ["--ar 9:16 (Reels/TikTok)", "--ar 4:5 (IG Feed)"])
+        else: 
+            # === UPDATE: MENAMBAHKAN 16:9 ===
+            ar_display = st.selectbox("📐 Rasio", [
+                "--ar 16:9 (Landscape Print/TV)",
+                "--ar 2:3 (Poster/Flyer)", 
+                "--ar 3:2 (Banner/Landscape)", 
+                "--ar 4:3 (Majalah)"
+            ])
+            # =================================
+        
+        ar_instr = f"Add {ar_display.split(' ')[0] + ' ' + ar_display.split(' ')[1]} at end."
         limit_msg = "Safe Limit: ~1800 chars"
     else:
         st.info(f"ℹ️ {ai_platform}: Atur rasio manual di web.")
@@ -259,14 +270,14 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
         else:
             st.error("❌ Gagal Total. Cek Sidebar.")
 
-# --- UPDATE LOG (SELALU DI BAWAH) ---
+# --- UPDATE LOG ---
 st.sidebar.markdown("---")
-with st.sidebar.expander("ℹ️ Keterangan Update v4.5"):
+with st.sidebar.expander("ℹ️ Keterangan Update v4.6"):
     st.markdown("""
-    **Fitur Terbaru:**
+    **New Update:**
+    - 📐 **Ratio 16:9:** Ditambahkan pada Print Media.
     - 🤖 **Multi-Platform:** Support Midjourney v6, Flux.1, Ideogram 2.0.
-    - 🛡️ **Adobe Compliant:** Logika *Concept Diversification* (Object Slice/Social/Print).
-    - 📏 **Limit Karakter:** Otomatis membatasi <2000 karakter agar tidak error.
-    - 🔄 **Auto-Sync Model:** Validasi key pintar (Anti-Error 404/400).
-    - 📜 **Log Error:** Tersembunyi rapi di Sidebar.
+    - 🛡️ **Adobe Compliant:** Logika Concept Diversification.
+    - 📏 **Limit Karakter:** Auto-limit <2000 chars.
+    - 🔄 **Auto-Sync Model:** Validasi key pintar.
     """)
