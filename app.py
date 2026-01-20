@@ -1,14 +1,17 @@
 import streamlit as st
 import time
 import random
-from PIL import Image # Library tambahan untuk proses gambar
+import json
+import os
+from datetime import datetime
+from PIL import Image
 
 # ==========================================
-# 1. SETUP & LIBRARY
+# 1. SETUP & CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="Microstock Gen v5.0 (Vision)",
-    page_icon="👁️",
+    page_title="Microstock Gen v5.1 (History)",
+    page_icon="🕒",
     layout="wide"
 )
 
@@ -19,7 +22,7 @@ st.markdown("""
     div[data-testid="stExpander"] {border: 1px solid #e0e0e0; border-radius: 8px;}
     .char-count {font-size: 12px; color: #666; margin-top: 5px; font-family: monospace;}
     .translated-text {font-size: 14px; font-weight: bold; color: #2e7bcf; background-color: #f0f8ff; padding: 8px; border-radius: 5px; border: 1px solid #cce5ff; margin-bottom: 15px;}
-    .stImage {border-radius: 8px; border: 1px solid #ddd;}
+    .history-item {font-size: 12px; border-bottom: 1px solid #eee; padding: 5px 0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -31,7 +34,40 @@ except ImportError:
     st.stop()
 
 # ==========================================
-# 2. FUNGSI UTILITIES (VALIDASI & TRANSLATE)
+# 2. SISTEM MANAJEMEN HISTORI (DATABASE LOKAL)
+# ==========================================
+HISTORY_FILE = "key_history.json"
+
+def load_history():
+    """Membaca file history JSON"""
+    if not os.path.exists(HISTORY_FILE):
+        return {}
+    try:
+        with open(HISTORY_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_to_history(api_key, model_name):
+    """Menyimpan/Update key ke history dengan timestamp"""
+    history = load_history()
+    
+    # Simpan dengan format dictionary
+    history[api_key] = {
+        "model": model_name,
+        "last_used": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "status": "Active"
+    }
+    
+    with open(HISTORY_FILE, 'w') as f:
+        json.dump(history, f, indent=4)
+
+def delete_history():
+    if os.path.exists(HISTORY_FILE):
+        os.remove(HISTORY_FILE)
+
+# ==========================================
+# 3. FUNGSI UTILITIES
 # ==========================================
 
 def clean_keys(raw_text):
@@ -51,7 +87,6 @@ def check_key_health(api_key):
         found_model = None
         candidates = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
         
-        # Prioritas Model Multimodal (Flash/Pro 1.5 sangat bagus untuk gambar)
         for m in candidates:
             if 'flash' in m and '1.5' in m: found_model = m; break
         if not found_model:
@@ -63,6 +98,10 @@ def check_key_health(api_key):
 
         model = genai.GenerativeModel(found_model)
         model.generate_content("Hi", generation_config={'max_output_tokens': 1})
+        
+        # JIKA SUKSES -> SIMPAN KE HISTORY OTOMATIS
+        save_to_history(api_key, found_model)
+        
         return True, "Active", found_model
     except Exception as e:
         err = str(e)
@@ -82,44 +121,90 @@ def translate_topic(text, api_key, model_name):
         return text
 
 # ==========================================
-# 3. SIDEBAR
+# 4. SIDEBAR: KEY MANAGER & HISTORY
 # ==========================================
 st.sidebar.title("🔑 Key Manager")
 
 if 'active_keys_data' not in st.session_state:
     st.session_state.active_keys_data = []
 
-raw_input = st.sidebar.text_area("Paste API Keys:", height=100, placeholder="AIzaSy...")
+# --- TAB NAVIGASI SIDEBAR ---
+tab_input, tab_history = st.sidebar.tabs(["📝 Input Baru", "🕒 Riwayat"])
 
-if st.sidebar.button("🔍 Validasi & Sync", type="primary"):
-    candidates = clean_keys(raw_input)
-    if not candidates:
-        st.sidebar.error("❌ Key kosong.")
-    else:
-        valid_data = []
-        progress_bar = st.sidebar.progress(0)
-        status_text = st.sidebar.empty()
-        
-        for i, key in enumerate(candidates):
-            status_text.text(f"Cek Key {i+1}...")
-            is_alive, msg, model_name = check_key_health(key)
-            if is_alive:
-                valid_data.append({'key': key, 'model': model_name})
-            progress_bar.progress((i + 1) / len(candidates))
-            
-        st.session_state.active_keys_data = valid_data
-        status_text.empty()
-        
-        if valid_data:
-            st.sidebar.success(f"🎉 {len(valid_data)} Key Siap!")
+with tab_input:
+    raw_input = st.text_area("Paste API Keys:", height=100, placeholder="AIzaSy...")
+    if st.button("🔍 Validasi & Simpan", type="primary"):
+        candidates = clean_keys(raw_input)
+        if not candidates:
+            st.error("❌ Key kosong.")
         else:
-            st.sidebar.error("💀 Semua Key Gagal.")
+            valid_data = []
+            progress = st.progress(0)
+            status = st.empty()
+            
+            for i, key in enumerate(candidates):
+                status.text(f"Cek Key {i+1}...")
+                is_alive, msg, model_name = check_key_health(key)
+                if is_alive:
+                    valid_data.append({'key': key, 'model': model_name})
+                progress.progress((i + 1) / len(candidates))
+                
+            st.session_state.active_keys_data = valid_data
+            status.empty()
+            
+            if valid_data:
+                st.success(f"🎉 {len(valid_data)} Key Disimpan!")
+            else:
+                st.error("💀 Semua Key Gagal.")
 
+with tab_history:
+    history_data = load_history()
+    if history_data:
+        st.caption(f"Tersimpan: {len(history_data)} Key")
+        
+        # Tombol Pakai Semua
+        if st.button("♻️ Pakai Semua Key Riwayat"):
+            loaded_keys = []
+            for k, v in history_data.items():
+                loaded_keys.append({'key': k, 'model': v['model']})
+            st.session_state.active_keys_data = loaded_keys
+            st.success(f"Berhasil memuat {len(loaded_keys)} key!")
+            time.sleep(1)
+            st.rerun()
+
+        # Tombol Hapus
+        if st.button("🗑️ Hapus Riwayat", type="secondary"):
+            delete_history()
+            st.rerun()
+
+        st.markdown("---")
+        # Tampilkan List
+        for k, v in history_data.items():
+            masked_key = f"...{k[-6:]}"
+            last_used = v.get('last_used', '-')
+            model_short = v['model'].split('/')[-1]
+            
+            st.markdown(f"""
+            <div class='history-item'>
+                <b>🔑 {masked_key}</b><br>
+                <span style='color:green'>● {model_short}</span><br>
+                <span style='color:#666'>🕒 {last_used}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+    else:
+        st.info("Belum ada riwayat key.")
+
+# INDIKATOR STATUS AKTIF
 if st.session_state.active_keys_data:
-    st.sidebar.info(f"🟢 {len(st.session_state.active_keys_data)} Key Aktif")
+    st.sidebar.markdown("---")
+    st.sidebar.success(f"🟢 **{len(st.session_state.active_keys_data)} Key Siap Digunakan**")
+else:
+    st.sidebar.markdown("---")
+    st.sidebar.warning("🔴 Tidak ada Key Aktif")
 
 # ==========================================
-# 4. LOGIKA GENERATOR & ANGLES
+# 5. LOGIKA UTAMA (ANGLES & PROMPTING)
 # ==========================================
 
 SAFETY = {
@@ -141,48 +226,39 @@ def get_angles(category, qty):
     return random.sample(base, qty)
 
 # ==========================================
-# 5. UI GENERATOR UTAMA
+# 6. UI UTAMA (GENERATOR)
 # ==========================================
-st.title("👁️ Microstock Gen v5.0 (Vision)")
-st.caption("Multimodal: Text + Image Reference Support")
+st.title("👁️ Microstock Gen v5.1")
+st.caption("Vision Support • Auto-History • Multi-Platform")
 
 ai_platform = st.radio("🤖 Platform:", ["Midjourney v6", "Flux.1", "Ideogram 2.0"], horizontal=True)
 
-col1, col2 = st.columns([1.2, 1]) # Kolom kiri sedikit lebih lebar untuk gambar
+col1, col2 = st.columns([1.2, 1])
 
 with col1:
-    topic = st.text_input("💡 Topik (Opsional jika pakai Variasi Gambar)", placeholder="Contoh: Kucing pakai helm")
-    
-    # --- FITUR BARU: IMAGE UPLOADER ---
+    topic = st.text_input("💡 Topik (Auto-Translate)", placeholder="Contoh: Kucing pakai helm")
     st.markdown("---")
-    uploaded_file = st.file_uploader("🖼️ Upload Referensi Gambar (JPG/PNG)", type=["jpg", "jpeg", "png", "webp"])
+    uploaded_file = st.file_uploader("🖼️ Upload Referensi Gambar (Opsional)", type=["jpg", "png", "webp"])
     
     img_ref_mode = None
     pil_image = None
     
     if uploaded_file:
-        # Tampilkan gambar dan pilihan mode
-        st.image(uploaded_file, caption="Preview Referensi", width=250)
-        pil_image = Image.open(uploaded_file) # Buka gambar dengan PIL
-        
-        img_ref_mode = st.radio(
-            "🎯 Mode Referensi Gambar:",
-            ["🎨 Style Ref (Ambil Gaya)", "📦 Object Ref (Ambil Subjek)", "🔄 Variation (Buat Ulang)"],
-            help="Style: Terapkan gaya gambar ini ke topik teks Anda.\nObject: Pertahankan objek gambar ini, tapi ubah background sesuai teks.\Variation: Buat variasi kreatif dari gambar ini."
-        )
-    # ----------------------------------
+        st.image(uploaded_file, width=200)
+        pil_image = Image.open(uploaded_file)
+        img_ref_mode = st.radio("🎯 Mode Referensi:", ["🎨 Style Ref", "📦 Object Ref", "🔄 Variation"])
 
 with col2:
     category = st.radio("🎯 Kategori Output:", ["Object Slice (PNG Assets)", "Social Media (IG/TikTok)", "Print Media (Flyer/Banner)"])
     
     if ai_platform == "Midjourney v6":
         if category == "Object Slice (PNG Assets)": ar_display = "--ar 1:1"
-        elif category == "Social Media (IG/TikTok)": ar_display = st.selectbox("📐 Rasio", ["--ar 9:16 (Reels)", "--ar 4:5 (Feed)"])
-        else: ar_display = st.selectbox("📐 Rasio", ["--ar 16:9 (Land)", "--ar 2:3 (Port)", "--ar 3:2 (Land)", "--ar 4:3 (Magz)"])
+        elif category == "Social Media (IG/TikTok)": ar_display = st.selectbox("📐 Rasio", ["--ar 9:16", "--ar 4:5"])
+        else: ar_display = st.selectbox("📐 Rasio", ["--ar 16:9", "--ar 2:3", "--ar 3:2", "--ar 4:3"])
         ar_instr = f"Add {ar_display.split(' ')[0] + ' ' + ar_display.split(' ')[1]} at end."
         limit_msg = "Safe Limit: ~1800 chars"
     else:
-        st.info(f"ℹ️ {ai_platform}: Atur rasio manual di web.")
+        st.info(f"ℹ️ {ai_platform}: Atur rasio manual.")
         ar_instr = "Describe composition explicitly."
         limit_msg = "Hard Limit: 2000 chars"
         
@@ -192,35 +268,29 @@ with col2:
 st.markdown("---")
 
 # ==========================================
-# 6. EKSEKUSI MULTIMODAL
+# 7. EKSEKUSI
 # ==========================================
 if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
     
     keys_data = st.session_state.active_keys_data
     
-    # Validasi Input yang lebih kompleks
     if not keys_data:
-        st.error("⛔ Validasi Key dulu di Sidebar!")
+        st.error("⛔ Load Key dari Riwayat atau Input Baru dulu!")
         st.stop()
         
-    # Jika tidak ada gambar, topik wajib diisi. Jika ada gambar variation, topik opsional.
     if not uploaded_file and not topic:
         st.warning("⚠️ Masukkan Topik atau Upload Gambar.")
         st.stop()
         
-    # --- PROSES TRANSLATE (Jika ada topik) ---
+    # Translate
     english_topic = ""
     if topic:
-        with st.spinner("🌍 Menerjemahkan topik..."):
-            translator_key = keys_data[0]['key']
-            translator_model = keys_data[0]['model']
-            english_topic = translate_topic(topic, translator_key, translator_model)
-            st.markdown(f"<div class='translated-text'>🇺🇸 EN Context: {english_topic}</div>", unsafe_allow_html=True)
-    # ------------------------------------------
+        with st.spinner("🌍 Menerjemahkan..."):
+            english_topic = translate_topic(topic, keys_data[0]['key'], keys_data[0]['model'])
+            st.markdown(f"<div class='translated-text'>🇺🇸 EN: {english_topic}</div>", unsafe_allow_html=True)
 
     results = []
     st.sidebar.markdown("---")
-    st.sidebar.caption("📉 Status Proses")
     error_log = st.sidebar.expander("📜 Log Error", expanded=False)
     
     pbar = st.progress(0)
@@ -236,52 +306,34 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
             current_data = keys_data[key_idx]
             try:
                 genai.configure(api_key=current_data['key'], transport='rest')
-                # Model Flash/Pro 1.5 mendukung input gambar (multimodal)
                 model = genai.GenerativeModel(current_data['model'])
                 
-                limit_instr = "CRITICAL: Output must be under 1800 chars. Concise & Dense."
+                # UPDATE TIMESTAMP DI BACKGROUND
+                save_to_history(current_data['key'], current_data['model'])
                 
-                # --- RACIKAN PROMPT MULTIMODAL ---
-                # Base role & task
+                limit_instr = "Output < 1800 chars. Concise."
+                
                 base_prompt = f"""
-                Role: {ai_platform.split(' ')[0]} Expert Prompter.
-                Task: Create a detailed image prompt.
+                Role: {ai_platform.split(' ')[0]} Expert.
+                Task: Detailed image prompt.
                 Category: {category}. Angle: {angle}.
-                RULES: Commercial stock quality. {ar_instr} {limit_instr}
+                RULES: Commercial quality. {ar_instr} {limit_instr}
                 OUTPUT: Raw prompt text only.
                 """
                 
-                # Logika jika ADA GAMBAR
                 if uploaded_file and pil_image:
                     if img_ref_mode.startswith("🎨 Style"):
-                        vision_instr = f"""
-                        VISION TASK: Analyze the uploaded image's STYLE (lighting, color palette, texture, mood).
-                        APPLY that style to this new subject: "{english_topic}".
-                        Do not copy the image's subject, only its aesthetic vibes.
-                        """
+                        vision_instr = f"Analyze STYLE (lighting/color). Apply to: '{english_topic}'."
                     elif img_ref_mode.startswith("📦 Object"):
-                        vision_instr = f"""
-                        VISION TASK: Identify the main OBJECT/SUBJECT in the uploaded image. Keep its appearance.
-                        PLACE that object into a new context/environment based on: "{english_topic}" and Angle: {angle}.
-                        """
-                    else: # Variation
-                        vision_instr = f"""
-                        VISION TASK: Create a creative VARIATION of the uploaded image. Keep core identity but change composition slightly based on Angle: {angle}.
-                        (Context hint if any: "{english_topic}")
-                        """
-                    # INPUT KE GEMINI: [Teks Instruksi, Data Gambar PIL]
+                        vision_instr = f"Identify MAIN OBJECT. Place in new context: '{english_topic}'. Angle: {angle}."
+                    else:
+                        vision_instr = f"Create creative VARIATION. Angle: {angle}. Context: '{english_topic}'."
                     final_input = [base_prompt + vision_instr, pil_image]
-                    
-                # Logika jika HANYA TEKS
                 else:
-                    text_instr = f"""
-                    TASK: Create image prompt for Subject: "{english_topic}". Angle: {angle}.
-                    """
+                    text_instr = f"Subject: '{english_topic}'. Angle: {angle}."
                     final_input = base_prompt + text_instr
 
-                # KIRIM KE GEMINI (Bisa Teks saja atau Teks+Gambar)
                 response = model.generate_content(final_input, safety_settings=SAFETY)
-                # -----------------------------------------
                 
                 if response.text:
                     clean_p = response.text.strip().replace('"', '').replace("`", "").replace("Prompt:", "")
@@ -303,31 +355,18 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
         pbar.progress((i+1)/qty)
     
     if results:
-        st.success(f"✅ Selesai! {len(results)} Prompt Vision.")
+        st.success(f"✅ Selesai! {len(results)} Prompt.")
         
-        ref_status = f"IMAGE REF: {img_ref_mode}" if uploaded_file else "NO IMAGE REF"
-        txt_out = f"PLATFORM: {ai_platform}\nTOPIK: {topic} ({english_topic})\n{ref_status}\n\n"
+        ref_txt = f"IMAGE REF: {img_ref_mode}" if uploaded_file else ""
+        txt_out = f"PLATFORM: {ai_platform}\nTOPIK: {topic} ({english_topic})\n{ref_txt}\n\n"
         for idx, r in enumerate(results):
             txt_out += f"[{r[0]}]\n{r[1]}\n\n"
         
-        st.download_button("📥 Download .txt", txt_out, f"prompts_vision.txt")
+        st.download_button("📥 Download .txt", txt_out, f"prompts_v5.txt")
         
         for idx, (ang, txt) in enumerate(results):
-            char_len = len(txt)
-            color = "green" if char_len < 1800 else "orange" if char_len < 2000 else "red"
             st.markdown(f"**#{idx+1} {ang}**")
             st.code(txt, language="text")
-            st.markdown(f"<div class='char-count' style='color:{color}'>Length: {char_len} chars</div>", unsafe_allow_html=True)
+            st.caption(f"Len: {len(txt)} chars")
     else:
-        st.error("❌ Gagal Total. Cek Sidebar.")
-
-# --- UPDATE LOG ---
-st.sidebar.markdown("---")
-with st.sidebar.expander("ℹ️ Update v5.0 (Vision)"):
-    st.markdown("""
-    - 👁️ **Image Input:** Upload referensi gambar.
-    - 🎨 **Style Ref Mode:** Tiru gaya gambar lain.
-    - 📦 **Object Ref Mode:** Pertahankan subjek, ubah latar.
-    - 🔄 **Variation Mode:** Buat variasi kreatif.
-    - 🌍 **Auto-Translate:** Masih berfungsi.
-    """)
+        st.error("❌ Gagal. Cek Log.")
