@@ -7,11 +7,11 @@ from datetime import datetime
 from PIL import Image
 
 # ==========================================
-# 1. SETUP & CONFIGURATION
+# 1. SETUP & LIBRARY
 # ==========================================
 st.set_page_config(
-    page_title="Microstock Gen v5.1 (History)",
-    page_icon="🕒",
+    page_title="Microstock Gen v5.2",
+    page_icon="⚡",
     layout="wide"
 )
 
@@ -22,7 +22,6 @@ st.markdown("""
     div[data-testid="stExpander"] {border: 1px solid #e0e0e0; border-radius: 8px;}
     .char-count {font-size: 12px; color: #666; margin-top: 5px; font-family: monospace;}
     .translated-text {font-size: 14px; font-weight: bold; color: #2e7bcf; background-color: #f0f8ff; padding: 8px; border-radius: 5px; border: 1px solid #cce5ff; margin-bottom: 15px;}
-    .history-item {font-size: 12px; border-bottom: 1px solid #eee; padding: 5px 0;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -34,42 +33,33 @@ except ImportError:
     st.stop()
 
 # ==========================================
-# 2. SISTEM MANAJEMEN HISTORI (DATABASE LOKAL)
+# 2. SIMPLE CACHE SYSTEM (Auto-Save)
 # ==========================================
-HISTORY_FILE = "key_history.json"
+CACHE_FILE = "api_cache.json"
 
-def load_history():
-    """Membaca file history JSON"""
-    if not os.path.exists(HISTORY_FILE):
-        return {}
-    try:
-        with open(HISTORY_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        return {}
+def load_cache():
+    """Mengambil key terakhir dari file"""
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get("keys", ""), data.get("timestamp", "")
+        except:
+            return "", ""
+    return "", ""
 
-def save_to_history(api_key, model_name):
-    """Menyimpan/Update key ke history dengan timestamp"""
-    history = load_history()
-    
-    # Simpan dengan format dictionary
-    history[api_key] = {
-        "model": model_name,
-        "last_used": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "status": "Active"
+def save_cache(keys_text):
+    """Menyimpan key ke file saat validasi sukses"""
+    data = {
+        "keys": keys_text,
+        "timestamp": datetime.now().strftime("%d %B %Y, %H:%M")
     }
-    
-    with open(HISTORY_FILE, 'w') as f:
-        json.dump(history, f, indent=4)
-
-def delete_history():
-    if os.path.exists(HISTORY_FILE):
-        os.remove(HISTORY_FILE)
+    with open(CACHE_FILE, 'w') as f:
+        json.dump(data, f)
 
 # ==========================================
-# 3. FUNGSI UTILITIES
+# 3. UTILITIES
 # ==========================================
-
 def clean_keys(raw_text):
     if not raw_text: return []
     candidates = raw_text.replace('\n', ',').split(',')
@@ -87,6 +77,7 @@ def check_key_health(api_key):
         found_model = None
         candidates = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
         
+        # Prioritas Model (Multimodal Friendly)
         for m in candidates:
             if 'flash' in m and '1.5' in m: found_model = m; break
         if not found_model:
@@ -94,117 +85,86 @@ def check_key_health(api_key):
                 if 'pro' in m and '1.5' in m: found_model = m; break
         if not found_model and candidates: found_model = candidates[0]
             
-        if not found_model: return False, "No Model Found", None
+        if not found_model: return False, "No Model", None
 
         model = genai.GenerativeModel(found_model)
         model.generate_content("Hi", generation_config={'max_output_tokens': 1})
-        
-        # JIKA SUKSES -> SIMPAN KE HISTORY OTOMATIS
-        save_to_history(api_key, found_model)
-        
         return True, "Active", found_model
     except Exception as e:
         err = str(e)
-        if "429" in err: return False, "Quota Limit", None
-        if "400" in err: return False, "Invalid Key", None
-        return False, f"Error: {err[:15]}...", None
+        if "429" in err: return False, "Limit", None
+        return False, "Error", None
 
 def translate_topic(text, api_key, model_name):
     if not text: return ""
     try:
         genai.configure(api_key=api_key, transport='rest')
         model = genai.GenerativeModel(model_name)
-        sys_prompt = f"""Translate to English for Image Prompt. If English, return as is. Input: "{text}". Output (English Only):"""
+        sys_prompt = f"""Translate to English for Image Prompt. Input: "{text}". Output (English Only):"""
         response = model.generate_content(sys_prompt)
         return response.text.strip()
     except:
         return text
 
 # ==========================================
-# 4. SIDEBAR: KEY MANAGER & HISTORY
+# 4. SIDEBAR (SIMPEL & CUKUP 1 BLOK)
 # ==========================================
-st.sidebar.title("🔑 Key Manager")
+st.sidebar.title("🔑 API Key")
 
+# Load data lama
+cached_keys, last_time = load_cache()
+
+# Text Area dengan nilai default dari cache
+raw_input = st.sidebar.text_area("Paste API Keys:", value=cached_keys, height=100, placeholder="AIzaSy...")
+
+# Tampilkan Timestamp di bawah kotak
+if last_time:
+    st.sidebar.caption(f"🕒 Terakhir dipakai: {last_time}")
+
+# Session State untuk menyimpan data validasi aktif
 if 'active_keys_data' not in st.session_state:
     st.session_state.active_keys_data = []
 
-# --- TAB NAVIGASI SIDEBAR ---
-tab_input, tab_history = st.sidebar.tabs(["📝 Input Baru", "🕒 Riwayat"])
-
-with tab_input:
-    raw_input = st.text_area("Paste API Keys:", height=100, placeholder="AIzaSy...")
-    if st.button("🔍 Validasi & Simpan", type="primary"):
-        candidates = clean_keys(raw_input)
-        if not candidates:
-            st.error("❌ Key kosong.")
-        else:
-            valid_data = []
-            progress = st.progress(0)
-            status = st.empty()
-            
-            for i, key in enumerate(candidates):
-                status.text(f"Cek Key {i+1}...")
-                is_alive, msg, model_name = check_key_health(key)
-                if is_alive:
-                    valid_data.append({'key': key, 'model': model_name})
-                progress.progress((i + 1) / len(candidates))
-                
-            st.session_state.active_keys_data = valid_data
-            status.empty()
-            
-            if valid_data:
-                st.success(f"🎉 {len(valid_data)} Key Disimpan!")
-            else:
-                st.error("💀 Semua Key Gagal.")
-
-with tab_history:
-    history_data = load_history()
-    if history_data:
-        st.caption(f"Tersimpan: {len(history_data)} Key")
-        
-        # Tombol Pakai Semua
-        if st.button("♻️ Pakai Semua Key Riwayat"):
-            loaded_keys = []
-            for k, v in history_data.items():
-                loaded_keys.append({'key': k, 'model': v['model']})
-            st.session_state.active_keys_data = loaded_keys
-            st.success(f"Berhasil memuat {len(loaded_keys)} key!")
-            time.sleep(1)
-            st.rerun()
-
-        # Tombol Hapus
-        if st.button("🗑️ Hapus Riwayat", type="secondary"):
-            delete_history()
-            st.rerun()
-
-        st.markdown("---")
-        # Tampilkan List
-        for k, v in history_data.items():
-            masked_key = f"...{k[-6:]}"
-            last_used = v.get('last_used', '-')
-            model_short = v['model'].split('/')[-1]
-            
-            st.markdown(f"""
-            <div class='history-item'>
-                <b>🔑 {masked_key}</b><br>
-                <span style='color:green'>● {model_short}</span><br>
-                <span style='color:#666'>🕒 {last_used}</span>
-            </div>
-            """, unsafe_allow_html=True)
-            
+if st.sidebar.button("Validasi Key", type="primary"):
+    candidates = clean_keys(raw_input)
+    if not candidates:
+        st.sidebar.error("❌ Key kosong.")
     else:
-        st.info("Belum ada riwayat key.")
+        valid_data = []
+        progress = st.sidebar.progress(0)
+        status = st.sidebar.empty()
+        
+        for i, key in enumerate(candidates):
+            status.text(f"Cek {i+1}...")
+            is_alive, msg, model_name = check_key_health(key)
+            if is_alive:
+                valid_data.append({'key': key, 'model': model_name})
+            progress.progress((i + 1) / len(candidates))
+            
+        st.session_state.active_keys_data = valid_data
+        status.empty()
+        progress.empty()
+        
+        if valid_data:
+            st.sidebar.success(f"✅ {len(valid_data)} Key Aktif")
+            # Simpan ke cache agar besok tidak perlu paste lagi
+            save_cache(raw_input)
+            # Refresh halaman agar timestamp update (opsional, tapi bagus utk UX)
+            time.sleep(0.5)
+            st.rerun()
+        else:
+            st.sidebar.error("💀 Semua Key Mati.")
 
-# INDIKATOR STATUS AKTIF
+# Indikator status sederhana
 if st.session_state.active_keys_data:
-    st.sidebar.markdown("---")
-    st.sidebar.success(f"🟢 **{len(st.session_state.active_keys_data)} Key Siap Digunakan**")
+    st.sidebar.info("🟢 Ready")
 else:
-    st.sidebar.markdown("---")
-    st.sidebar.warning("🔴 Tidak ada Key Aktif")
+    # Jika belum divalidasi tapi ada cache, coba validasi otomatis (Lazy Load)
+    if cached_keys and not st.session_state.active_keys_data:
+        st.sidebar.warning("⚠️ Klik Validasi untuk mengaktifkan.")
 
 # ==========================================
-# 5. LOGIKA UTAMA (ANGLES & PROMPTING)
+# 5. LOGIKA GENERATOR (CORE)
 # ==========================================
 
 SAFETY = {
@@ -226,19 +186,19 @@ def get_angles(category, qty):
     return random.sample(base, qty)
 
 # ==========================================
-# 6. UI UTAMA (GENERATOR)
+# 6. UI UTAMA
 # ==========================================
-st.title("👁️ Microstock Gen v5.1")
-st.caption("Vision Support • Auto-History • Multi-Platform")
+st.title("⚡ Microstock Gen v5.2")
+st.caption("Simple Cache • Vision • Auto-Translate")
 
 ai_platform = st.radio("🤖 Platform:", ["Midjourney v6", "Flux.1", "Ideogram 2.0"], horizontal=True)
 
 col1, col2 = st.columns([1.2, 1])
 
 with col1:
-    topic = st.text_input("💡 Topik (Auto-Translate)", placeholder="Contoh: Kucing pakai helm")
+    topic = st.text_input("💡 Topik (Auto-Translate)", placeholder="Contoh: Kucing oren makan ikan")
     st.markdown("---")
-    uploaded_file = st.file_uploader("🖼️ Upload Referensi Gambar (Opsional)", type=["jpg", "png", "webp"])
+    uploaded_file = st.file_uploader("🖼️ Upload Referensi (Opsional)", type=["jpg", "png", "webp"])
     
     img_ref_mode = None
     pil_image = None
@@ -249,7 +209,7 @@ with col1:
         img_ref_mode = st.radio("🎯 Mode Referensi:", ["🎨 Style Ref", "📦 Object Ref", "🔄 Variation"])
 
 with col2:
-    category = st.radio("🎯 Kategori Output:", ["Object Slice (PNG Assets)", "Social Media (IG/TikTok)", "Print Media (Flyer/Banner)"])
+    category = st.radio("🎯 Kategori:", ["Object Slice (PNG Assets)", "Social Media (IG/TikTok)", "Print Media (Flyer/Banner)"])
     
     if ai_platform == "Midjourney v6":
         if category == "Object Slice (PNG Assets)": ar_display = "--ar 1:1"
@@ -275,7 +235,7 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
     keys_data = st.session_state.active_keys_data
     
     if not keys_data:
-        st.error("⛔ Load Key dari Riwayat atau Input Baru dulu!")
+        st.error("⛔ Klik tombol 'Validasi Key' di Sidebar dulu!")
         st.stop()
         
     if not uploaded_file and not topic:
@@ -307,9 +267,6 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
             try:
                 genai.configure(api_key=current_data['key'], transport='rest')
                 model = genai.GenerativeModel(current_data['model'])
-                
-                # UPDATE TIMESTAMP DI BACKGROUND
-                save_to_history(current_data['key'], current_data['model'])
                 
                 limit_instr = "Output < 1800 chars. Concise."
                 
