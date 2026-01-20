@@ -6,8 +6,8 @@ import random
 # 1. SETUP & LIBRARY
 # ==========================================
 st.set_page_config(
-    page_title="Microstock Gen v4.6",
-    page_icon="⚡",
+    page_title="Microstock Gen v4.7",
+    page_icon="🌍",
     layout="wide"
 )
 
@@ -17,6 +17,7 @@ st.markdown("""
     .stCodeBlock {margin-bottom: 0px;}
     div[data-testid="stExpander"] {border: 1px solid #e0e0e0; border-radius: 8px;}
     .char-count {font-size: 12px; color: #666; margin-top: 5px; font-family: monospace;}
+    .translated-text {font-size: 14px; font-weight: bold; color: #2e7bcf; background-color: #f0f8ff; padding: 8px; border-radius: 5px; border: 1px solid #cce5ff; margin-bottom: 15px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -28,7 +29,7 @@ except ImportError:
     st.stop()
 
 # ==========================================
-# 2. FUNGSI VALIDASI & UTILITIES
+# 2. FUNGSI UTILITIES (VALIDASI & TRANSLATE)
 # ==========================================
 
 def clean_keys(raw_text):
@@ -48,7 +49,6 @@ def check_key_health(api_key):
         found_model = None
         candidates = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
         
-        # Prioritas Model (Flash -> Pro -> Default)
         for m in candidates:
             if 'flash' in m and '1.5' in m: found_model = m; break
         if not found_model:
@@ -58,7 +58,6 @@ def check_key_health(api_key):
             
         if not found_model: return False, "No Model Found", None
 
-        # Test Ping
         model = genai.GenerativeModel(found_model)
         model.generate_content("Hi", generation_config={'max_output_tokens': 1})
         return True, "Active", found_model
@@ -68,8 +67,28 @@ def check_key_health(api_key):
         if "400" in err: return False, "Invalid Key", None
         return False, f"Error: {err[:15]}...", None
 
+# --- FITUR BARU: AUTO TRANSLATE ---
+def translate_topic(text, api_key, model_name):
+    """Menerjemahkan input user ke Inggris jika terdeteksi bahasa lain"""
+    try:
+        genai.configure(api_key=api_key, transport='rest')
+        model = genai.GenerativeModel(model_name)
+        
+        # Prompt khusus translator
+        sys_prompt = f"""
+        Translate the following text to English specifically for Image Generation Prompts.
+        If it's already English, return it exactly as is.
+        Input: "{text}"
+        Output (English Only):
+        """
+        
+        response = model.generate_content(sys_prompt)
+        return response.text.strip()
+    except:
+        return text # Jika gagal translate, pakai teks asli
+
 # ==========================================
-# 3. SIDEBAR: INPUT & VALIDASI
+# 3. SIDEBAR
 # ==========================================
 st.sidebar.title("🔑 Key Manager")
 
@@ -106,7 +125,7 @@ if st.session_state.active_keys_data:
     st.sidebar.info(f"🟢 {len(st.session_state.active_keys_data)} Key Aktif")
 
 # ==========================================
-# 4. LOGIKA UTAMA (SAFETY & ANGLES)
+# 4. LOGIKA GENERATOR
 # ==========================================
 
 SAFETY = {
@@ -128,16 +147,16 @@ def get_angles(category, qty):
     return random.sample(base, qty)
 
 # ==========================================
-# 5. UI GENERATOR (MAIN AREA)
+# 5. UI GENERATOR
 # ==========================================
-st.title("⚡ Microstock Gen v4.6")
-st.caption("Adobe Stock & Freepik Compliant • Multi-Platform Engine")
+st.title("🌍 Microstock Gen v4.7")
+st.caption("Auto-Translate Feature Included")
 
 ai_platform = st.radio("🤖 Platform:", ["Midjourney v6", "Flux.1", "Ideogram 2.0"], horizontal=True)
 
 col1, col2 = st.columns(2)
 with col1:
-    topic = st.text_input("💡 Topik", placeholder="Contoh: Fresh Croissant")
+    topic = st.text_input("💡 Topik (Bisa Bahasa Indonesia)", placeholder="Contoh: Penjual nasi goreng pinggir jalan")
     category = st.radio("🎯 Kategori:", ["Object Slice (PNG Assets)", "Social Media (IG/TikTok)", "Print Media (Flyer/Banner)"])
 
 with col2:
@@ -147,14 +166,7 @@ with col2:
         elif category == "Social Media (IG/TikTok)": 
             ar_display = st.selectbox("📐 Rasio", ["--ar 9:16 (Reels/TikTok)", "--ar 4:5 (IG Feed)"])
         else: 
-            # === UPDATE: MENAMBAHKAN 16:9 ===
-            ar_display = st.selectbox("📐 Rasio", [
-                "--ar 16:9 (Landscape Print/TV)",
-                "--ar 2:3 (Poster/Flyer)", 
-                "--ar 3:2 (Banner/Landscape)", 
-                "--ar 4:3 (Majalah)"
-            ])
-            # =================================
+            ar_display = st.selectbox("📐 Rasio", ["--ar 16:9 (Landscape)", "--ar 2:3 (Poster)", "--ar 3:2 (Banner)", "--ar 4:3 (Majalah)"])
         
         ar_instr = f"Add {ar_display.split(' ')[0] + ' ' + ar_display.split(' ')[1]} at end."
         limit_msg = "Safe Limit: ~1800 chars"
@@ -169,7 +181,7 @@ with col2:
 st.markdown("---")
 
 # ==========================================
-# 6. EKSEKUSI & SIDEBAR FOOTER
+# 6. EKSEKUSI
 # ==========================================
 if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
     
@@ -180,13 +192,22 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
     elif not topic:
         st.warning("⚠️ Masukkan Topik.")
     else:
+        # --- PROSES TRANSLATE DULUAN ---
+        with st.spinner("🌍 Menerjemahkan topik..."):
+            # Pakai key pertama yang valid untuk translate
+            translator_key = keys_data[0]['key']
+            translator_model = keys_data[0]['model']
+            
+            english_topic = translate_topic(topic, translator_key, translator_model)
+            
+            # Tampilkan hasil translate ke user
+            st.markdown(f"<div class='translated-text'>🇺🇸 EN: {english_topic}</div>", unsafe_allow_html=True)
+        # -------------------------------
+
         results = []
-        
-        # --- LOG ERROR (Dynamic) ---
         st.sidebar.markdown("---")
         st.sidebar.caption("📉 Status Proses")
-        error_log = st.sidebar.expander("📜 Log Error (Real-time)", expanded=False)
-        # ---------------------------
+        error_log = st.sidebar.expander("📜 Log Error", expanded=False)
         
         pbar = st.progress(0)
         angles = get_angles(category, qty)
@@ -205,10 +226,11 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
                     
                     limit_instr = "CRITICAL: Output must be under 1800 chars. Concise & Dense."
                     
+                    # SYSTEM PROMPT (Pakai english_topic, bukan topic asli)
                     if ai_platform == "Midjourney v6":
                         sys_prompt = f"""
                         Role: Midjourney Expert v6.
-                        Task: Create 1 prompt for {category}. Subject: {topic}. Angle: {angle}.
+                        Task: Create 1 prompt for {category}. Subject: {english_topic}. Angle: {angle}.
                         RULES: Commercial stock quality.
                         Include parameters: --style raw --stylize 50 {ar_instr}
                         {limit_instr}
@@ -217,7 +239,7 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
                     elif ai_platform == "Flux.1":
                         sys_prompt = f"""
                         Role: Flux.1 Expert.
-                        Task: Detailed image description for {category}. Subject: {topic}. Angle: {angle}.
+                        Task: Detailed image description for {category}. Subject: {english_topic}. Angle: {angle}.
                         RULES: Hyper-realistic, texture focus.
                         {limit_instr}
                         OUTPUT: Raw description only.
@@ -225,7 +247,7 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
                     elif ai_platform == "Ideogram 2.0":
                         sys_prompt = f"""
                         Role: Ideogram Expert.
-                        Task: Image description for {category}. Subject: {topic}. Angle: {angle}.
+                        Task: Image description for {category}. Subject: {english_topic}. Angle: {angle}.
                         RULES: Focus on Composition & Typography space.
                         {limit_instr}
                         OUTPUT: Raw description only.
@@ -255,11 +277,11 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
         if results:
             st.success(f"✅ Selesai! {len(results)} Prompt.")
             
-            txt_out = f"PLATFORM: {ai_platform}\nTOPIK: {topic}\n\n"
+            txt_out = f"PLATFORM: {ai_platform}\nTOPIK ASLI: {topic}\nTRANSLATED: {english_topic}\n\n"
             for idx, r in enumerate(results):
                 txt_out += f"[{r[0]}]\n{r[1]}\n\n"
             
-            st.download_button("📥 Download .txt", txt_out, f"prompts_{topic}.txt")
+            st.download_button("📥 Download .txt", txt_out, f"prompts_{topic.replace(' ', '_')}.txt")
             
             for idx, (ang, txt) in enumerate(results):
                 char_len = len(txt)
@@ -270,14 +292,11 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
         else:
             st.error("❌ Gagal Total. Cek Sidebar.")
 
-# --- UPDATE LOG ---
 st.sidebar.markdown("---")
-with st.sidebar.expander("ℹ️ Keterangan Update v4.6"):
+with st.sidebar.expander("ℹ️ Update v4.7"):
     st.markdown("""
-    **New Update:**
-    - 📐 **Ratio 16:9:** Ditambahkan pada Print Media.
-    - 🤖 **Multi-Platform:** Support Midjourney v6, Flux.1, Ideogram 2.0.
-    - 🛡️ **Adobe Compliant:** Logika Concept Diversification.
-    - 📏 **Limit Karakter:** Auto-limit <2000 chars.
-    - 🔄 **Auto-Sync Model:** Validasi key pintar.
+    - 🌍 **Auto-Translate:** Input Indo -> Proses English.
+    - 📐 **New Ratio:** 16:9 added.
+    - 🤖 **Multi-Platform:** MJ/Flux/Ideogram.
+    - 🛡️ **Adobe Compliant:** Diversified Angles.
     """)
