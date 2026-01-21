@@ -10,7 +10,7 @@ from PIL import Image
 # 1. SETUP & KONFIGURASI
 # ==========================================
 st.set_page_config(
-    page_title="Microstock Gen v6.1 (Fix Translate)",
+    page_title="Microstock Gen v6.2 (Anatomy Fix)",
     page_icon="💎",
     layout="wide"
 )
@@ -55,7 +55,7 @@ def save_cache(keys_text):
         json.dump(data, f)
 
 # ==========================================
-# 3. CORE LOGIC (STABLE & ROBUST)
+# 3. CORE LOGIC
 # ==========================================
 
 def clean_keys(raw_text):
@@ -96,31 +96,17 @@ def get_stable_model(api_key):
         if "429" in err: return False, "Limit (429)", None
         return False, "Error", None
 
-# --- PERBAIKAN TRANSLATOR (Iterasi Key) ---
 def translate_topic_robust(text, keys_data):
-    """Mencoba menerjemahkan dengan memutar semua key yang ada"""
     if not text: return ""
-    
-    # Loop semua key sampai ada yang berhasil
     for data in keys_data:
         try:
             genai.configure(api_key=data['key'], transport='rest')
             model = genai.GenerativeModel(data['model'])
-            
-            sys_prompt = f"""
-            Task: Translate the following text to English for an Image Generation Prompt.
-            If the text is already English, return it exactly as is.
-            Input: "{text}"
-            Output (English text only, no explanation):
-            """
-            
+            sys_prompt = f"""Task: Translate to English for Image Prompt. Input: "{text}". Output (English only):"""
             response = model.generate_content(sys_prompt)
-            if response.text:
-                return response.text.strip()
-        except:
-            continue # Jika gagal, coba key berikutnya
-            
-    return text # Jika semua gagal, kembalikan teks asli
+            if response.text: return response.text.strip()
+        except: continue
+    return text
 
 # ==========================================
 # 4. SIDEBAR
@@ -190,8 +176,8 @@ def get_angles(category, qty):
     if qty > len(base): return random.sample(base * 2, qty)
     return random.sample(base, qty)
 
-st.title("💎 Microstock Gen v6.1")
-st.caption("Fix Translator • Stable Core • Anti-429")
+st.title("💎 Microstock Gen v6.2")
+st.caption("Perfect Anatomy • Stable Core • Anti-429")
 
 ai_platform = st.radio("🤖 Platform:", ["Midjourney v6", "Flux.1", "Ideogram 2.0"], horizontal=True)
 
@@ -242,17 +228,11 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
         st.warning("⚠️ Isi Topik atau Upload Gambar.")
         st.stop()
 
-    # 1. TRANSLATE TOPIK (Robust)
+    # 1. TRANSLATE
     english_topic = ""
     if topic:
         with st.spinner("🌍 Menerjemahkan..."):
-            # Menggunakan fungsi baru yang mencoba semua key
             english_topic = translate_topic_robust(topic, keys_data)
-            
-            # Cek apakah berhasil translate
-            if english_topic == topic and topic.split()[0].lower() != english_topic.split()[0].lower():
-                 st.warning("⚠️ Gagal menerjemahkan (Server Busy). Menggunakan teks asli.")
-            
             st.markdown(f"<div class='translated-text'>🇺🇸 EN: {english_topic}</div>", unsafe_allow_html=True)
 
     results = []
@@ -265,6 +245,11 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
     angles = get_angles(category, qty)
     key_idx = 0 
     
+    # --- DEFINISI NEGATIVE PROMPT ---
+    # String ini yang akan ditempel atau dijadikan aturan
+    NEG_PROMPT_CMD = "--no extra fingers, extra hands, deformed hands, bad anatomy, distorted face, overprocessed"
+    NEG_PROMPT_NATURAL = "CRITICAL: Ensure perfect anatomy. No extra fingers, no deformed hands, no distorted face, no bad anatomy."
+
     for i in range(qty):
         angle = angles[i]
         status_text.text(f"⏳ Memproses {i+1}/{qty}: {angle}...")
@@ -281,15 +266,39 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
                 model = genai.GenerativeModel(current_data['model'])
                 
                 limit_instr = "Output must be under 1800 chars. Concise."
-                base_prompt = f"""
-                Role: {ai_platform.split(' ')[0]} Expert.
-                Task: Detailed image prompt.
-                Category: {category}. Angle: {angle}.
-                RULES: Commercial quality. {ar_instr} {limit_instr}
-                OUTPUT: Raw prompt text only.
-                """
                 
-                final_input = base_prompt
+                # --- PROMPT ENGINEERING KHUSUS ---
+                if ai_platform == "Midjourney v6":
+                    # MJ mendukung --no secara native
+                    sys_prompt = f"""
+                    Role: Midjourney Expert v6.
+                    Task: Create 1 prompt for {category}. Subject: {english_topic}. Angle: {angle}.
+                    RULES: Commercial stock quality.
+                    Include parameters: --style raw --stylize 50 {ar_instr} {NEG_PROMPT_CMD}
+                    {limit_instr}
+                    OUTPUT: Raw prompt text only.
+                    """
+                elif ai_platform == "Flux.1":
+                    # Flux butuh instruksi natural
+                    sys_prompt = f"""
+                    Role: Flux.1 Expert.
+                    Task: Detailed image description for {category}. Subject: {english_topic}. Angle: {angle}.
+                    RULES: Hyper-realistic, texture focus. {NEG_PROMPT_NATURAL}
+                    {limit_instr}
+                    OUTPUT: Raw description only.
+                    """
+                elif ai_platform == "Ideogram 2.0":
+                    # Ideogram butuh instruksi natural
+                    sys_prompt = f"""
+                    Role: Ideogram Expert.
+                    Task: Image description for {category}. Subject: {english_topic}. Angle: {angle}.
+                    RULES: Focus on Composition & Typography space. {NEG_PROMPT_NATURAL}
+                    {limit_instr}
+                    OUTPUT: Raw description only.
+                    """
+                
+                final_input = base_prompt = sys_prompt # Base prompt logic
+                
                 if uploaded_file and pil_image:
                     if img_ref_mode.startswith("🎨 Style"):
                         vision_instr = f"Analyze STYLE. Apply to: '{english_topic}'."
@@ -297,9 +306,7 @@ if st.button(f"🚀 Generate ({ai_platform})", type="primary"):
                         vision_instr = f"Identify MAIN OBJECT. Place in new context: '{english_topic}'. Angle: {angle}."
                     else:
                         vision_instr = f"Create creative VARIATION. Context: '{english_topic}'."
-                    final_input = [base_prompt + vision_instr, pil_image]
-                else:
-                    final_input = base_prompt + f"Subject: '{english_topic}'."
+                    final_input = [sys_prompt + vision_instr, pil_image]
 
                 response = model.generate_content(final_input, safety_settings=SAFETY)
                 
